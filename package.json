@@ -1,12 +1,16 @@
 {
   "name": "@red-cup-engineering/mandate-portfolio-allocation-service",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Converts independently supplied scores and risk measures into mandate-bounded target weights.",
   "exports": {
-    ".": "./src/allocate.mjs"
+    ".": "./src/allocate.mjs",
+    "./allocate-opportunities": "./src/allocate-opportunities.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@red-cup-engineering/position-sizing-service": "workspace:*"
   }
 }
