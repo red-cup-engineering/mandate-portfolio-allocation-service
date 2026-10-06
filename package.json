@@ -5,12 +5,23 @@
   "description": "Converts independently supplied scores and risk measures into mandate-bounded target weights.",
   "exports": {
     ".": "./src/allocate.mjs",
-    "./allocate-opportunities": "./src/allocate-opportunities.mjs"
+    "./allocate-opportunities": "./src/allocate-opportunities.mjs",
+    "./market-game": "./src/market-game.mjs",
+    "./public-observations": "./src/public-observations.mjs",
+    "./research-publication": "./src/research-publication.mjs",
+    "./play": "./src/play.mjs",
+    "./scenario-study": "./src/scenario-study.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@red-cup-engineering/position-sizing-service": "workspace:*"
+    "@red-cup-engineering/position-sizing-service": "workspace:*",
+    "@red-cup-engineering/gaming": "workspace:*",
+    "@red-cup-engineering/communicating": "workspace:*"
+  },
+  "bin": {
+    "market-game": "./apps/market-game.mjs",
+    "prediction-market-study": "./apps/prediction-market-study.mjs"
   }
 }

@@ -1,0 +1,13 @@
+{
+  "title": "Federal funds observations and prediction-market contract costs",
+  "question": "What does the latest overnight funding observation say, and which observed fees apply to the related Kalshi series?",
+  "wire": "filum-market-research",
+  "producer": "https://filum.561.group/",
+  "license": "Selected public facts with source attribution; source prose and proprietary trading records are excluded.",
+  "fields": [
+    { "externalId": "effr-latest", "path": ["effectiveDate"], "subject": "New York Fed effective federal funds observation", "predicate": "effective date", "label": "Effective date" },
+    { "externalId": "effr-latest", "path": ["percentRate"], "subject": "Effective federal funds rate", "predicate": "reported rate", "label": "Effective federal funds rate", "unit": "percent" },
+    { "externalId": "KXFED-contract-terms", "path": ["fee_type"], "subject": "Kalshi KXFED series", "predicate": "fee type", "label": "Observed fee type" },
+    { "externalId": "KXFED-contract-terms", "path": ["fee_multiplier"], "subject": "Kalshi KXFED series", "predicate": "fee multiplier", "label": "Observed fee multiplier" }
+  ]
+}
