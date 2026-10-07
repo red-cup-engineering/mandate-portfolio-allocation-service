@@ -14,6 +14,10 @@ const coinbaseUrl=`https://api.exchange.coinbase.com/products/ETH-USD/candles?gr
 const acquired=await Promise.allSettled([readPublicObservation({source:kalshiUrl,externalId:ticker+'-history',retainResponse:true},{fetchImpl,now:new Date(now).toISOString()}),readPublicObservation({source:coinbaseUrl,externalId:'ETH-USD-history',retainResponse:true},{fetchImpl,now:new Date(now).toISOString()})]);
 for(const r of acquired)if(r.status==='rejected')throw r.reason;
 const [kalshi,eth]=acquired.map(r=>r.value);
+return composeHistoricalStudy({kalshi,eth,ticker,cost,now,start,end});
+}
+
+function composeHistoricalStudy({kalshi,eth,ticker,cost,now,start,end}) {
 if(!Array.isArray(kalshi.observation.value.candlesticks)||!Array.isArray(eth.observation.value))throw new TypeError('documented candle carriers required');
 const quotes=kalshi.observation.value.candlesticks.map(c=>({at:c.end_period_ts,bid:Number(c.yes_bid?.close_dollars),ask:Number(c.yes_ask?.close_dollars),volume:Number(c.volume_fp)})).filter(q=>Number.isSafeInteger(q.at)&&q.bid>=0&&q.ask<=1&&q.bid<=q.ask&&q.ask-q.bid<=0.1&&q.volume>0).sort((a,b)=>a.at-b.at);
 const rows=[];
@@ -116,4 +120,28 @@ export function studyProspectiveStrategy({observations,observedAt,protocol}) {
  const market=body.market;
  const study=fitScenarioStudy({rows:[...training,...evaluation],source:`https://api.elections.kalshi.com/trade-api/v2/markets/${market}`,path:['signals',market,'rawMidpoint'],bins:body.bins,scenarios:body.scenarios,blockSize:body.blockSize,evaluationWindow:{start:body.evaluationStart,end:body.evaluationEnd},roundTripCostFraction:body.roundTripCostFraction,observedAt,liveUseLimitations:['public indicative quotes do not attest venue fills or Base gas; additional cost is assumed','frozen protocol and result have not been accepted by an independently authorized receiver']});
  return {status:'studied',market,...summary,study,eligibleForLiveUse:study.eligibleForLiveUse};
+}
+
+/** Replay an exploratory artifact using its exact retained responses, with no
+ * network, new observations, trade authority or independent acceptance. */
+export function replayPredictionMarketStudy(artifact) {
+ if(artifact?.kind!=='prediction-market-financial-strategy-study/v1'||artifact.sources?.length!==2)throw new TypeError('retained-historical-study-required');
+ const ticker=artifact.design?.signal,cost=artifact.study?.scores?.roundTripCostFraction;
+ if(!/^KXFED-\d{2}[A-Z]{3}-T\d+(?:\.\d+)?$/.test(ticker)||!(cost>=0&&cost<1))throw new TypeError('declared-historical-study-required');
+ const [kalshi,eth]=artifact.sources;
+ let url;try{url=new URL(kalshi.observation.source);}catch{throw new TypeError('historical-source-endpoint-required');}
+ const start=Number(url.searchParams.get('start_ts')),end=Number(url.searchParams.get('end_ts'));
+ if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||end-start!==90*86400||end%86400!==0)throw new TypeError('historical-source-window-required');
+ const endpoints=[`https://api.elections.kalshi.com/trade-api/v2/series/KXFED/markets/${ticker}/candlesticks?start_ts=${start}&end_ts=${end}&period_interval=1440`,`https://api.exchange.coinbase.com/products/ETH-USD/candles?granularity=86400&start=${new Date(start*1000).toISOString()}&end=${new Date(end*1000).toISOString()}`];
+ for(const [i,move] of artifact.sources.entries()) {
+  const source=move?.observation,{id,...body}=source??{},r=source?.retrieval;
+  if(move.kind!=='observe'||!source||id!==hashPosition(body)||source.source!==endpoints[i]||source.externalId!==(i?'ETH-USD-history':ticker+'-history')||source.availableAt!==source.observedAt||!Number.isFinite(Date.parse(source.observedAt))||Date.parse(source.observedAt)<end*1000||!r||r.requestedUrl!==endpoints[i]||r.finalUrl!==endpoints[i]||r.acquiredAt!==source.observedAt||!Array.isArray(r.selector)||r.selector.length!==0||typeof r.text!=='string'||Buffer.byteLength(r.text)>131072||r.responseBytes!==Buffer.byteLength(r.text)||r.responseDigest!==hashPosition(r.text))throw new TypeError('verified-historical-source-required');
+  let parsed;try{parsed=JSON.parse(r.text);}catch{throw new TypeError('historical-source-json-required');}
+  if(hashPosition(parsed)!==hashPosition(source.value))throw new TypeError('historical-source-value-mismatch');
+ }
+ const observedAt=artifact.study?.observations?.[0]?.observation?.observedAt,now=Date.parse(observedAt);
+ if(!Number.isFinite(now)||artifact.sources.some(move=>Date.parse(move.observation.observedAt)>now))throw new TypeError('historical-study-clock-required');
+ const reproduced=composeHistoricalStudy({kalshi,eth,ticker,cost,now,start,end});
+ if(hashPosition(reproduced)!==hashPosition(artifact))throw new TypeError('historical-study-replay-mismatch');
+ return {kind:'prediction-market-study-replay/v1',status:'reproduced',artifactDigest:hashPosition(artifact),studyId:reproduced.study.id,sourceIds:artifact.sources.map(move=>move.observation.id),rows:reproduced.rows.length,independentlyAccepted:false,eligibleForLiveUse:false,limits:['local replay checks internal integrity and calculation; it does not authenticate remote historical delivery','receiver authorization and acceptance remain separate','public historical prices do not establish fills or execution costs']};
 }
