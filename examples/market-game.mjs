@@ -13,7 +13,7 @@ import { venueOrderForIntent } from '../../brokerage-execution-transport-service
 const at = '2026-10-06T15:00:00.000Z', later = '2026-10-06T15:00:01.000Z', horizon = '2026-10-07T15:00:00.000Z';
 const market = '0x1111111111111111111111111111111111111111';
 const calibration = { sampleSize: 100, brier: .1, baselineBrier: .2, windowEnd: '2026-10-05T15:00:00.000Z', record: 'example:calibration', confidenceLowerBound: .01, netReturnConfidenceLowerBound: .01, liveUseLimitations: [] };
-const policy = { maxObservationAgeMs: 60000, minCalibrationSamples: 30, minCashCentsByVenue: { kalshi: 10000, alpaca: 10000, evm: 10000 }, maxDeployFraction: .5, maxInstrumentFraction: .15, maxScenarioLossFraction: .25, factorCaps: { technology: .45, crypto: .3 }, kellyMultiple: .5 };
+const policy = { principal: 'synthetic-principal', maxObservationAgeMs: 60000, minCalibrationSamples: 30, minCashCentsByVenue: { kalshi: 10000, alpaca: 10000, evm: 10000 }, maxDeployFraction: .5, maxInstrumentFraction: .15, maxScenarioLossFraction: .25, factorCaps: { technology: .45, crypto: .3 }, kellyMultiple: .5 };
 const record = [];
 let position = marketGame.initialPosition();
 const play = (intent, stamp = at) => {
@@ -24,7 +24,7 @@ const play = (intent, stamp = at) => {
 const observe = (id, source, value, stamp = at) => play({ kind: 'observe', observation: { id, source, value, availableAt: stamp, observedAt: stamp } }, stamp);
 observe('example:calibration', 'urn:synthetic:scored-forecasts', { kind: 'calibration', ...calibration });
 observe('example:technology', 'urn:synthetic:issuer-release', { demand: 'growth', kind: 'news' });
-for (const venue of ['kalshi', 'alpaca', 'evm']) play({ kind: 'account', account: { venue, observedAt: at, equityCents: 100000, freeCashCents: 100000, factorExposureCents: {} } });
+for (const venue of ['kalshi', 'alpaca', 'evm']) play({ kind: 'account', account: { venue, principal: 'synthetic-principal', observedAt: at, equityCents: 100000, freeCashCents: 100000, factorExposureCents: {} } });
 const quotes = [
   { id: 'example:kalshi', venue: 'kalshi', instrument: 'EXAMPLE-TECH-YES', carrier: 'binary', side: 'yes', entryPrice: .25, availableUnits: 10000, unitStep: 1, factors: { technology: 1 } },
   { id: 'example:alpaca', venue: 'alpaca', instrument: 'EXAMPLE', carrier: 'asset', assetClass: 'us_equity', side: 'long', entryPrice: 100, availableUnits: 1000, unitStep: .001, factors: { technology: 1 } },
@@ -42,15 +42,15 @@ play({ kind: 'forecast', forecast: { id: 'example:forecast', observedAt: at, hor
 const before = planMarket(position, policy, at);
 if (new Set(before.orders.map((o) => o.venue)).size !== 3) throw new Error('example did not fund all three venue carriers');
 play({ kind: 'decide', at, policy, expectedPosition: hashPosition(marketGame.serialize(position)) });
-const contract = { type: 'PrincipalBrokerageServiceContract', id: 'example:contract', scopes: ['orders:intent'], risk: { maximumOrderNotional: 500, maximumLossAmount: 500, concentrationLimit: 1 }, capital: { amount: 1000, currency: 'USD' } };
+const contract = { principal: 'synthetic-principal', type: 'PrincipalBrokerageServiceContract', id: 'example:contract', scopes: ['orders:intent'], risk: { maximumOrderNotional: 500, maximumLossAmount: 500, concentrationLimit: 1 }, capital: { amount: 1000, currency: 'USD' } };
 const alpacaOrder = before.orders.find((o) => o.venue === 'alpaca');
 const intent = formAggressivePortfolioIntent({ contract, evidencePackets: [{ type: 'IssuerEvidencePacket', id: 'example:packet' }], symbol: 'EXAMPLE', notional: alpacaOrder.capitalCents / 100, maximumLoss: alpacaOrder.capitalCents / 100, thesis: 'Synthetic only', falsifier: 'Synthetic only', liquidityPremise: 'Synthetic only', executionPremise: 'Synthetic only', scenarios: [{ pnl: 10 }, { pnl: -10 }], marketDecision: before, asOf: at });
-const alpacaVenueOrder = venueOrderForIntent(intent, at, 'synthetic-client-order');
+const alpacaVenueOrder = venueOrderForIntent(intent, at, 'synthetic-client-order', contract.principal);
 const chain = GMX_CHAINS[42161];
 const gmx = createGmxAdapter({ rpc: async () => `0x${'f'.repeat(64)}` });
 const evmOrder = before.orders.find((o) => o.venue === 'evm');
 const collateralUsd = evmOrder.capitalCents / 100;
-const grant = { type: 'RevocableBrokerageAuthorityGrant', id: 'example:grant', revoked: false, adapter: 'gmx', chainId: 42161, account: market, validUntil: horizon, scopes: ['orders:build'], limits: { maxLeverage: 2, maxValuePerTransactionUsd: 1000, allowedContracts: [chain.exchangeRouter, chain.orderVault, chain.router, chain.usdc] } };
+const grant = { principal: 'synthetic-principal', type: 'RevocableBrokerageAuthorityGrant', id: 'example:grant', revoked: false, adapter: 'gmx', chainId: 42161, account: market, validUntil: horizon, scopes: ['orders:build'], limits: { maxLeverage: 2, maxValuePerTransactionUsd: 1000, allowedContracts: [chain.exchangeRouter, chain.orderVault, chain.router, chain.usdc] } };
 const unsigned = await gmx.buildPerpOrder({ grant, now: at, marketDecision: before, order: { market, collateralToken: chain.usdc, collateralAmount: BigInt(Math.floor(collateralUsd * 1e6)), collateralUsd, sizeDeltaUsd: usdToE30(collateralUsd), isLong: true, acceptablePriceE30: usdToE30(100), executionFeeWei: 1n } });
 const specification = { source: 'urn:synthetic:kalshi-probability', path: ['probability'], calibration, bins: [
   { lower: 0, upper: .5, likelihoods: { growth: .1, 'tech-down': .7, 'crypto-down': .2 } },
@@ -71,4 +71,4 @@ const summary = (decision) => decision.orders.map(({ venue, capitalCents }) => (
 console.log(JSON.stringify({ synthetic: true, venueWrites: 0, before: summary(before), afterPredictionMarketObservation: summary(after), alpacaIntentBound: intent.marketDecision.id === before.id,
   alpacaEntryCeiling: alpacaVenueOrder.limit_price, alpacaFundedQuantity: alpacaVenueOrder.qty,
   evmUnsignedPlanBound: unsigned.marketDecision === before.id && unsigned.signed === false && unsigned.broadcast === false,
-  replayHash: replay.stateHash, replayEqualsArrival: true, outcomes: strategyPerformance(position), kalshiCapCents: allocationFor(before, { venue: 'kalshi', instrument: 'EXAMPLE-TECH-YES', side: 'yes', at }) }, null, 2));
+  replayHash: replay.stateHash, replayEqualsArrival: true, outcomes: strategyPerformance(position), kalshiCapCents: allocationFor(before, { venue: 'kalshi', principal: 'synthetic-principal', instrument: 'EXAMPLE-TECH-YES', side: 'yes', at }) }, null, 2));

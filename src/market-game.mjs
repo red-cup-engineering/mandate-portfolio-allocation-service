@@ -28,6 +28,7 @@ function extend(state, move) {
     }
     case 'account': {
       const row = move.account; venue(row.venue); time(row.observedAt);
+      if (row.principal !== undefined) name(row.principal);
       money(row.equityCents); money(row.freeCashCents); money(row.reservedCents ?? 0);
       if (row.freeCashCents > row.equityCents) throw new RangeError('deployable cash exceeds equity; borrowing is not equity');
       for (const [instrument, holding] of Object.entries(row.inventory ?? {})) {
@@ -168,6 +169,8 @@ export function planMarket(state, policy, at) {
   }
   const accounts = Object.values(state.accounts).sort((a, b) => a.venue.localeCompare(b.venue));
   if (!accounts.length || accounts.some((a) => !fresh(a))) throw new RangeError('fresh account readings required');
+  const principal = name(policy.principal);
+  if (accounts.some(account => account.principal !== principal)) throw new TypeError('funded accounts must belong to the declared decision principal');
   const equity = accounts.reduce((s, a) => s + a.equityCents, 0); if (equity <= 0) throw new RangeError('positive portfolio equity required');
   const baseline = f.scenarios.map((s) => 1 + accounts.reduce((pnl, a) => pnl + finite(s.heldPnlCentsByVenue[a.venue], `held P&L ${a.venue}`), 0) / equity);
   const skips = [], candidates = [], seen = new Set();
@@ -246,7 +249,7 @@ export function planMarket(state, policy, at) {
   // that an optimizer's fractional portfolio proves a different order batch.
   const fractions = candidates.map(({ q }) => (orders.find((o) => o.id === q.id)?.capitalCents ?? 0) / equity);
   if (constraints.some(({ coefficients: a, cap }) => a.reduce((s, x, i) => s + x * fractions[i], 0) > cap + 1e-9)) throw new RangeError('discrete quantities breach joint limits');
-  const body = { type: 'MarketGameDecision', at, position: hashPosition(state), forecast: f.id, horizon: f.horizon, orders, skips, equityCents: equity,
+  const body = { type: 'MarketGameDecision', principal, at, position: hashPosition(state), forecast: f.id, horizon: f.horizon, orders, skips, equityCents: equity,
     scenarioWealth: f.scenarios.map((s, k) => ({ id: s.id, probability: s.probability, wealth: baseline[k] + candidates.reduce((sum, c, i) => sum + c.returns[k] * fractions[i], 0) })),
     sizing: { converged: sized.converged, kktResidual: sized.kktResidual }, performance: strategyPerformance(state), effect: 'intent-only' };
   return { id: hashPosition(body), ...body };
@@ -254,11 +257,12 @@ export function planMarket(state, policy, at) {
 
 /** Venue consumers use the funded decision as a cap, with a matching horizon.
  * It is never an authority grant or an execution receipt. */
-export function allocationsFor(decision, { venue: v, instrument, side, chainId, protocol, at, maxAgeMs = 60000 }) {
+export function allocationsFor(decision, { venue: v, principal, instrument, side, chainId, protocol, at, maxAgeMs = 60000 }) {
   venue(v); const age = time(at) - time(decision?.at);
   if (decision?.type !== 'MarketGameDecision' || decision.effect !== 'intent-only' || age < 0 || age > maxAgeMs || time(decision.horizon) <= time(at)) throw new RangeError('market decision is stale or invalid');
   const { id, ...body } = decision; if (id !== hashPosition(body)) throw new RangeError('market decision content address differs');
   if (!side || (v === 'evm' && (!chainId || !protocol))) throw new TypeError('allocation side and EVM chain/protocol required');
+  if (name(principal) !== decision.principal) throw new TypeError('market decision belongs to another principal');
   return decision.orders.filter((o) => o.venue === v && o.instrument === instrument && o.side === side
     && (v !== 'evm' || (o.chainId === chainId && o.protocol === protocol)));
 }
