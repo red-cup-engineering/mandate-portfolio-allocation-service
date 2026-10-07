@@ -18,3 +18,16 @@ test('no funding inventory or future funding valuation cannot create a funded or
  const missing=state();delete missing.forecast.scenarios[0].fundingValues;assert.throws(()=>planMarket(missing,policy,at),/funding value/);
  const mismatch=state();mismatch.accounts.evm.inventory.ETH.markPrice=2;assert.throws(()=>planMarket(mismatch,policy,at),/mark differs/);
 });
+
+test('conditioned portfolio decisions require positive measured financial confidence',()=>{
+ const s=state();s.forecast.conditioning={model:'test-model'};s.forecast.calibration={...calibration,confidenceLowerBound:0.01,netReturnConfidenceLowerBound:-0.01};s.observations.cal.value={...s.observations.cal.value,...s.forecast.calibration};
+ assert.throws(()=>planMarket(s,policy,at),/lacks positive measured/);
+ s.forecast.calibration.netReturnConfidenceLowerBound=0.01;
+ assert.throws(()=>planMarket(s,policy,at),/differs from scored evidence/);
+ s.observations.cal.value.netReturnConfidenceLowerBound=0.01;
+ assert.equal(planMarket(s,policy,at).orders.length,1);
+});
+test('removing conditioning metadata cannot bypass a scored study rejection',()=>{
+ const s=state();s.observations.cal.value.method='fixed-binned-likelihood-temporal-holdout/v2';
+ assert.throws(()=>planMarket(s,policy,at),/lacks positive measured/);
+});
