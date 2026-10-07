@@ -102,7 +102,7 @@ test('malformed opportunities are refused', () => {
 });
 
 // ── sizing.method: 'bayesian-joint' (opt-in) ─────────────────────────────────────────────
-const ladder = (lossRate, asks = [3, 3, 2]) => asks.map((ask, i) => tail(`${NY}-B${i}`, NY, '2026-10-04', ask, lossRate, 0.001));
+const ladder = (lossRate, asks = [3, 3, 2]) => asks.map((ask, i) => tail(`${NY}-B${i}`, NY, '2026-10-04', ask, lossRate, 0.001, {outcomeStructure:'exclusive-losses'}));
 
 test('the default method is unchanged by an explicit sizing.method kelly', () => {
   const opportunities = ladder(0.01);
@@ -173,4 +173,10 @@ test('modelRisk falls back per event when a date group is too large to enumerate
   const result = allocateOpportunities({ opportunities, venues: venue(100000), lanes, sizing: { ...joint, modelRisk }, limits });
   assert.equal(result.sizingGroups[0].fallback, 'per-event');
   assert.ok(result.orders.length > 0);
+});
+
+test('joint sizing refuses to invent exclusivity or independence from marginals',()=>{
+ const unknown=ladder(.005).map(({outcomeStructure,...o})=>o);
+ assert.throws(()=>allocateOpportunities({opportunities:unknown,venues:venue(10000),lanes,sizing:joint,limits}),/explicit-consistent-outcome-structure/);
+ assert.throws(()=>allocateOpportunities({opportunities:unknown,venues:venue(10000),lanes,sizing:{...joint,modelRisk},limits}),/explicit-consistent-outcome-structure/);
 });

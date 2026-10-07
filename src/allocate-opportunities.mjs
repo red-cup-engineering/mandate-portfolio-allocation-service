@@ -21,12 +21,10 @@
  * `sizing.method: 'bayesian-joint'` (opt-in; the default, 'kelly', is exactly the above) replaces step 2's
  * per-opportunity Kelly fraction. Opportunities are grouped by lane and correlation.event; an opportunity may carry
  * `posterior` ({alpha, beta}, Beta on its win probability), whose mean (the Bayes-optimal single-bet winProbability
- * under log utility) replaces winProbability. Each group of two or more is sized jointly: when the groups' loss
- * probabilities (1 - win) sum to at most 1 they are read as the bands of ONE underlying, exactly one of which
- * settles, and the scenario set is those bands plus a residual "no listed bet loses"; failing that, when the win
- * probabilities sum to at most 1 the wins are the exclusive bands; failing both the group is treated as independent
- * (up to 12 members) and otherwise sized singly. Different events are independent: each group's budget is the whole
- * of lane capital, and the per-event, per-date, open and cash caps of steps 3-5 then apply unchanged.
+ * under log utility) replaces winProbability. Each multi-member event requires the caller to state
+ * outcomeStructure consistently: exclusive-losses, exclusive-wins, or independent. Marginal probabilities
+ * alone cannot establish dependence. The supplied structure is a model assumption, not proof of calibration.
+ * Per-event, per-date, open and cash caps then apply unchanged.
  *
  * `sizing.modelRisk: { modes, level }` (only with 'bayesian-joint') adds SHARED MODEL ERROR: `modes` are latent model
  * states `{weight, lambda}` (remainder = calibrated, lambda 1) in which every member's loss probability is scaled by
@@ -39,7 +37,7 @@
  * Pure: the caller states the world (opportunities, venue cash, existing
  * exposure) and receives intended orders. Nothing is placed here.
  */
-import { bayesianBinaryKellyFraction, independentScenarios, jointKellyForCorrelatedOutcomes, kellyFraction, ladderScenarios, modelRiskScenarios } from '@red-cup-engineering/position-sizing-service';
+import { bayesianBinaryKellyFraction, binaryOutcomeScenarios, jointKellyForCorrelatedOutcomes, kellyFraction, modelRiskScenarios } from '@red-cup-engineering/position-sizing-service';
 
 const integerCents = (value, label) => {
   if (!Number.isInteger(value) || value < 1) throw new TypeError(`${label}-must-be-positive-integer-cents`);
@@ -62,6 +60,7 @@ const exposureOf = (exposure, lane) => exposure?.lanes?.[lane] ?? exposure ?? {}
  * @param {object} input
  * @param {{id: string, lane: string, venue: string, instrument: {venue: string, id: string, kind: string}, side: string,
  *   priceCents: number, payoffCents: number, winProbability: number, settlesOn: string,
+ *   outcomeStructure?: 'exclusive-losses'|'exclusive-wins'|'independent',
  *   correlation: {event: string, date: string}, heldRiskCents?: number, rankEdge?: number}[]} input.opportunities
  *   priceCents is the unit cost of the position bought (its unit risk); payoffCents its unit gain; winProbability is
  *   already conservative. rankEdge, when given, replaces the default ranking edge (winProbability less the break-even
@@ -158,8 +157,6 @@ export function allocateOpportunities({ opportunities, venues, lanes, sizing = {
   return jointFractions ? { orders, skips, laneCapital, sizingGroups: jointFractions.groups } : { orders, skips, laneCapital };
 }
 
-const MAX_INDEPENDENT_GROUP = 12;
-const BAND_TOLERANCE = 1e-9;
 
 /**
  * Unscaled growth-optimal fraction of lane capital for every opportunity that can be sized, as a Map keyed by the
@@ -182,7 +179,7 @@ function jointFractionsFor(opportunities, laneCapital, cashLeft, modelRisk) {
   const isTooLarge = (error) => error instanceof RangeError && /scenario set would exceed|limited to 20/.test(error.message);
   const sizeSharedError = (members) => {
     const result = (() => {
-      const sc = modelRiskScenarios({ modes: modelRisk.modes, opportunities: members.map((o) => ({ id: o.id, event: o.correlation.event, priceCents: o.priceCents, payoffCents: o.payoffCents, winProbability: winOf(o) })) });
+      const sc = modelRiskScenarios({ modes: modelRisk.modes, opportunities: members.map((o) => ({ id: o.id, event: o.correlation.event, priceCents: o.priceCents, payoffCents: o.payoffCents, winProbability: winOf(o), outcomeStructure: o.outcomeStructure })) });
       return { sc, joint: jointKellyForCorrelatedOutcomes({ outcomes: sc.outcomes, scenarios: sc.scenarios, budget: 1, tolerance: 1e-8 }) };
     })();
     members.forEach((o, i) => fractions.set(o, result.joint.fractions[i]));
@@ -209,25 +206,8 @@ function jointFractionsFor(opportunities, laneCapital, cashLeft, modelRisk) {
     }
     const win = members.map((o) => (o.posterior ? o.posterior.alpha / (o.posterior.alpha + o.posterior.beta) : o.winProbability));
     const outcomes = members.map((o) => ({ id: o.id, priceCents: o.priceCents, payoffCents: o.payoffCents }));
-    const singly = () => members.forEach((o, i) => fractions.set(o, bayesianBinaryKellyFraction({
-      posterior: { mean: win[i] }, priceCents: o.priceCents, payoffCents: o.payoffCents }).fraction));
-    let structure;
-    let scenarios;
-    const lossMass = members.reduce((sum, o, i) => sum + (1 - win[i]), 0);
-    const winMass = win.reduce((sum, w) => sum + w, 0);
-    if (members.length === 1) structure = 'single';
-    else if (lossMass <= 1 + BAND_TOLERANCE) {
-      structure = 'exclusive-losses';
-      scenarios = ladderScenarios({ bands: members.map((o, i) => ({ id: String(i), probability: Math.min(1, 1 - win[i]) })), bets: members.map((o, i) => ({ id: o.id, band: String(i), side: 'no' })) }).scenarios;
-    } else if (winMass <= 1 + BAND_TOLERANCE) {
-      structure = 'exclusive-wins';
-      scenarios = ladderScenarios({ bands: members.map((o, i) => ({ id: String(i), probability: Math.min(1, win[i]) })), bets: members.map((o, i) => ({ id: o.id, band: String(i), side: 'yes' })) }).scenarios;
-    } else if (members.length <= MAX_INDEPENDENT_GROUP) {
-      structure = 'independent';
-      scenarios = independentScenarios(win);
-    } else structure = 'single';
-    if (!scenarios) singly();
-    else {
+    const {structure,scenarios} = binaryOutcomeScenarios(members.map((o,i)=>({...o,winProbability:win[i]})));
+    {
       const result = jointKellyForCorrelatedOutcomes({ outcomes, scenarios, budget: 1, tolerance: 1e-8 });
       members.forEach((o, i) => fractions.set(o, result.fractions[i]));
     }
