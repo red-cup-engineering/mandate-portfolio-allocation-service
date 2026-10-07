@@ -45,3 +45,27 @@ export async function observePredictionMarketStrategy({market='KXFED-26OCT-T4.25
  const body={kind:'prediction-market-prospective-observation/v1',market,asset:'ETH-USD',featureAt:signal.observation.observedAt,observedAt:asset.observation.observedAt,rawMidpoint:(bid+ask)/2,signalBid:bid,signalAsk:ask,assetBid,assetAsk,sources:[signal,asset],interpretation:'observed signal followed by indicative public asset quotes; no fills or outcome',eligibleForLiveUse:false};
  return {id:hashPosition(body),...body};
 }
+
+/** Resolve chronological daily intervals from acquired quotes. Extra looks
+ * cannot become extra trials, and a missing endpoint is never backfilled. */
+export function resolveProspectiveStrategyRows({observations,observedAt}) {
+ if(!Array.isArray(observations)||observations.length>20000||!Number.isFinite(Date.parse(observedAt)))throw new TypeError('bounded-prospective-history-required');
+ const unique=new Map();
+ for(const observation of observations){
+  const {id,...body}=observation;
+  if(id!==hashPosition(body)||body.kind!=='prediction-market-prospective-observation/v1'||body.asset!=='ETH-USD'||!Number.isFinite(body.assetBid)||!Number.isFinite(body.assetAsk)||!(body.assetBid>0)||!(body.assetAsk>=body.assetBid)||!Number.isFinite(body.rawMidpoint)||body.rawMidpoint<0||body.rawMidpoint>1||!Number.isFinite(Date.parse(body.featureAt))||!Number.isFinite(Date.parse(body.observedAt))||Date.parse(body.featureAt)>=Date.parse(body.observedAt)||Date.parse(body.observedAt)>Date.parse(observedAt)||body.sources?.length!==2)throw new TypeError('identified-causal-prospective-observation-required');
+  if(body.sources[0]?.observation?.observedAt!==body.featureAt||body.sources[1]?.observation?.observedAt!==body.observedAt)throw new TypeError('prospective-source-clock-mismatch');
+  unique.set(id,observation);
+ }
+ const ordered=[...unique.values()].sort((a,b)=>Date.parse(a.observedAt)-Date.parse(b.observedAt)||a.id.localeCompare(b.id));
+ if(new Set(ordered.map(row=>row.market)).size>1)throw new TypeError('one-declared-prospective-market-required');
+ const rows=[];let entry=ordered[0],missedEndpoints=0;
+ for(const exit of ordered.slice(1)){
+  const elapsed=Date.parse(exit.observedAt)-Date.parse(entry.observedAt);
+  if(elapsed<86400000)continue;
+  if(elapsed>87600000){missedEndpoints++;entry=exit;continue;}
+  const body={availableAt:entry.featureAt,featureAt:entry.featureAt,entryAt:entry.observedAt,outcomeAt:exit.observedAt,value:entry.rawMidpoint,returnFraction:exit.assetBid/entry.assetAsk-1,scenario:(exit.assetBid+exit.assetAsk)>(entry.assetBid+entry.assetAsk)?'up':'down',evidenceIds:[entry.sources[0].observation.id,entry.sources[1].observation.id,exit.sources[1].observation.id],prospectiveObservationIds:[entry.id,exit.id]};
+  rows.push({id:hashPosition(body),...body});entry=exit;
+ }
+ return {rows,observations:ordered.length,missedEndpoints,pendingEntry:entry?.id??null,design:{horizonSeconds:86400,maximumEndpointDelaySeconds:1200,entryRule:'earliest acquired observation, then each accepted endpoint; missed endpoint resets without a return',returnRule:'observed exit bid / observed entry ask - 1',scenarioRule:'public quote midpoint direction',fillsObserved:false,gasObserved:false}};
+}
