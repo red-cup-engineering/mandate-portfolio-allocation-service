@@ -103,8 +103,8 @@ export function assessCryptoBarsPage({
     ? Math.max(0, Math.round((timestamps.at(-1) - timestamps[0]) / intervalMs) + 1 - timestamps.length)
     : 0;
   const pageTruncated = typeof nextPageToken === "string" && nextPageToken.length > 0;
-  const missingStartCoverage = !timestamps.length || timestamps[0] > expectedFirst + intervalMs;
-  const missingEndCoverage = !timestamps.length || timestamps.at(-1) < expectedLast - intervalMs;
+  const missingStartCoverage = !timestamps.length || timestamps[0] !== expectedFirst;
+  const missingEndCoverage = !timestamps.length || timestamps.at(-1) !== expectedLast;
   const gapTooLarge = largestGapMs > intervalMs * 1.5;
 
   let stale = false;
