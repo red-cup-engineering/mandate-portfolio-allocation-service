@@ -46,6 +46,23 @@ export async function observePredictionMarketStrategy({market='KXFED-26OCT-T4.25
  return {id:hashPosition(body),...body};
 }
 
+/** Verify retained response bytes and their exact derived public quotes. A hash
+ * identifies evidence; it does not establish that a copied summary follows it. */
+function verifyProspectiveSources(body) {
+ const endpoints=[`https://api.elections.kalshi.com/trade-api/v2/markets/${body.market}`,'https://api.exchange.coinbase.com/products/ETH-USD/ticker'];
+ const values=body.sources.map((move,i)=>{
+  const source=move?.observation;if(move?.kind!=='observe'||!source)throw new TypeError('retained-prospective-source-required');
+  const {id,...record}=source,r=source.retrieval;
+  if(id!==hashPosition(record)||source.source!==endpoints[i]||source.externalId!==(i?'ETH-USD':body.market)||source.availableAt!==source.observedAt||!r||r.requestedUrl!==endpoints[i]||r.finalUrl!==endpoints[i]||r.acquiredAt!==source.observedAt||!Array.isArray(r.selector)||r.selector.length!==0||typeof r.text!=='string'||Buffer.byteLength(r.text)>131072||r.responseBytes!==Buffer.byteLength(r.text)||r.responseDigest!==hashPosition(r.text))throw new TypeError('verified-prospective-source-required');
+  let value;try{value=JSON.parse(r.text);}catch{throw new TypeError('prospective-source-json-required');}
+  if(hashPosition(value)!==hashPosition(source.value))throw new TypeError('prospective-source-value-mismatch');
+  return value;
+ });
+ const m=values[0]?.market,a=values[1];
+ const bid=Number(m?.yes_bid_dollars),ask=Number(m?.yes_ask_dollars),assetBid=Number(a?.bid),assetAsk=Number(a?.ask);
+ if(m?.ticker!==body.market||m.status!=='active'||m.yes_bid_dollars==null||m.yes_ask_dollars==null||!Number.isFinite(bid)||!Number.isFinite(ask)||bid<0||ask>1||bid>ask||ask-bid>0.1||!(Date.parse(m.close_time)>Date.parse(body.featureAt))||body.signalBid!==bid||body.signalAsk!==ask||body.rawMidpoint!==(bid+ask)/2||a?.bid==null||a?.ask==null||!Number.isFinite(assetBid)||!Number.isFinite(assetAsk)||!(assetBid>0)||assetAsk<assetBid||body.assetBid!==assetBid||body.assetAsk!==assetAsk)throw new TypeError('prospective-source-quote-mismatch');
+}
+
 /** Resolve chronological daily intervals from acquired quotes. Extra looks
  * cannot become extra trials, and a missing endpoint is never backfilled. */
 export function resolveProspectiveStrategyRows({observations,observedAt}) {
@@ -55,6 +72,7 @@ export function resolveProspectiveStrategyRows({observations,observedAt}) {
   const {id,...body}=observation;
   if(id!==hashPosition(body)||body.kind!=='prediction-market-prospective-observation/v1'||body.asset!=='ETH-USD'||!Number.isFinite(body.assetBid)||!Number.isFinite(body.assetAsk)||!(body.assetBid>0)||!(body.assetAsk>=body.assetBid)||!Number.isFinite(body.rawMidpoint)||body.rawMidpoint<0||body.rawMidpoint>1||!Number.isFinite(Date.parse(body.featureAt))||!Number.isFinite(Date.parse(body.observedAt))||Date.parse(body.featureAt)>=Date.parse(body.observedAt)||Date.parse(body.observedAt)>Date.parse(observedAt)||body.sources?.length!==2)throw new TypeError('identified-causal-prospective-observation-required');
   if(body.sources[0]?.observation?.observedAt!==body.featureAt||body.sources[1]?.observation?.observedAt!==body.observedAt)throw new TypeError('prospective-source-clock-mismatch');
+  verifyProspectiveSources(body);
   unique.set(id,observation);
  }
  const ordered=[...unique.values()].sort((a,b)=>Date.parse(a.observedAt)-Date.parse(b.observedAt)||a.id.localeCompare(b.id));

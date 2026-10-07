@@ -21,9 +21,11 @@ test('asset marks must contain positive uncrossed quotes',async()=>{
 });
 
 import {hashPosition} from '@red-cup-engineering/gaming/running/rules';
-function acquired(hours,price=2000){
+import {observation} from '../src/public-observations.mjs';
+function acquired(hours,price=2000,ticker=market.ticker){
  const observedAt=new Date(Date.parse('2026-10-01T00:00:01Z')+hours*3600000).toISOString(),featureAt=new Date(Date.parse(observedAt)-1000).toISOString();
- const body={kind:'prediction-market-prospective-observation/v1',market:market.ticker,asset:'ETH-USD',rawMidpoint:0.31,assetBid:price,assetAsk:price+1,featureAt,observedAt,sources:[{observation:{id:'signal-'+hours,observedAt:featureAt}},{observation:{id:'asset-'+hours,observedAt}}]};return {id:hashPosition(body),...body};
+ const sources=[{source:`https://api.elections.kalshi.com/trade-api/v2/markets/${ticker}`,externalId:ticker,at:featureAt,value:{market:{...market,ticker}}},{source:'https://api.exchange.coinbase.com/products/ETH-USD/ticker',externalId:'ETH-USD',at:observedAt,value:{bid:String(price),ask:String(price+1)}}].map(({source,externalId,at,value})=>{const text=JSON.stringify(value);return observation({source,externalId,availableAt:at,observedAt:at,value,retrieval:{requestedUrl:source,finalUrl:source,text,responseBytes:Buffer.byteLength(text),selector:[],responseDigest:hashPosition(text),acquiredAt:at}});});
+ const body={kind:'prediction-market-prospective-observation/v1',market:ticker,asset:'ETH-USD',rawMidpoint:0.31,signalBid:.30,signalAsk:.32,assetBid:price,assetAsk:price+1,featureAt,observedAt,sources};return {id:hashPosition(body),...body};
 }
 test('dense and duplicate looks yield only non-overlapping daily outcomes',()=>{
  const observations=Array.from({length:49},(_,h)=>acquired(h));observations.push(observations[0]);
@@ -37,8 +39,8 @@ test('missed endpoints are not scored using later prices',()=>{
 test('mutated, future and mixed-market inputs cannot produce outcomes',()=>{
  assert.throws(()=>resolveProspectiveStrategyRows({observations:[{...acquired(0),assetBid:1}],observedAt:acquired(1).observedAt}),/identified-causal/);
  assert.throws(()=>resolveProspectiveStrategyRows({observations:[acquired(2)],observedAt:acquired(1).observedAt}),/identified-causal/);
- const second=acquired(24),{id,...body}=second;body.market='KXFED-26DEC-T4.25';
- assert.throws(()=>resolveProspectiveStrategyRows({observations:[acquired(0),{id:hashPosition(body),...body}],observedAt:acquired(25).observedAt}),/one-declared/);
+ const second=acquired(24,2000,'KXFED-26DEC-T4.25');
+ assert.throws(()=>resolveProspectiveStrategyRows({observations:[acquired(0),second],observedAt:acquired(25).observedAt}),/one-declared/);
 });
 
 test('prospective assessment waits for resolved training and evaluation instead of fabricating a model',()=>{
@@ -46,5 +48,13 @@ test('prospective assessment waits for resolved training and evaluation instead 
 });
 test('resolved prospective assessment retains causal source rows and refuses unmeasured execution and repeated exploratory looks',()=>{
  const observations=Array.from({length:141},(_,i)=>acquired(i*24,2000+i*2));const result=studyProspectiveStrategy({observations,observedAt:acquired(141*24).observedAt,roundTripCostFraction:0});
- assert.equal(result.status,'studied');assert.equal(result.completedIntervals,140);assert.ok(result.study.scores.blockCount>=3);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study.scores.liveUseLimitations.length,2);assert.ok(result.study.scores.sourceObservationIds.includes('signal-0'));assert.ok(result.study.observations.every(row=>row.observation.source==='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study'));
+ assert.equal(result.status,'studied');assert.equal(result.completedIntervals,140);assert.ok(result.study.scores.blockCount>=3);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study.scores.liveUseLimitations.length,2);assert.ok(result.study.scores.sourceObservationIds.includes(acquired(0).sources[0].observation.id));assert.ok(result.study.observations.every(row=>row.observation.source==='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study'));
+});
+
+test('rehashing an outer record cannot detach prices or provenance from retained responses',()=>{
+ const rehash=row=>{const {id,...body}=row;return {id:hashPosition(body),...body};};
+ for(const mutate of [r=>{r.assetBid=1;},r=>{r.rawMidpoint=.9;},r=>{r.sources[0].observation.value.market.yes_bid_dollars='.9';},r=>{r.sources[1].observation.retrieval.text='{}';},r=>{r.sources[1].observation.source='https://fixture.invalid';},r=>{r.sources[1].observation.retrieval.responseBytes=1;}]){
+  const row=structuredClone(acquired(0));mutate(row);assert.throws(()=>resolveProspectiveStrategyRows({observations:[rehash(row)],observedAt:acquired(1).observedAt}),/prospective-source/);
+ }
+ const row=structuredClone(acquired(0));row.sources[1].observation.value.bid='1';const {id,...source}=row.sources[1].observation;row.sources[1].observation={id:hashPosition(source),...source};assert.throws(()=>resolveProspectiveStrategyRows({observations:[rehash(row)],observedAt:acquired(1).observedAt}),/source-value-mismatch/);
 });
