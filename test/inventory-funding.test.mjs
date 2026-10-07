@@ -128,7 +128,10 @@ test('fleet move records replayable per-principal decisions and requires every s
  const move={kind:'decide-fleet',at,policies:[policy,personalPolicy],expectedPosition:hashPosition(s)};
  const result=marketGame.extend(s,move);assert.equal(Object.keys(result.state.decisions).length,2);assert.equal(result.events[0].polarity,'P');
  assert.deepEqual(marketGame.extend(s,move),result);
- const replay=marketGame.replay(s,[move]);assert.equal(replay.valid,true);assert.equal(replay.stateHash,hashPosition(result.state));
+ const warmup=[...Object.entries(s.observations).map(([id,row])=>({kind:'observe',observation:{...row,id,source:'urn:synthetic:replay'}})),...Object.values(s.accounts).map(account=>({kind:'account',account})),...Object.values(s.quotes).map(quote=>({kind:'quote',quote})),...Object.values(s.strategies).map(strategy=>({kind:'strategy',strategy})),{kind:'forecast',forecast:s.forecast}];
+ const witnessed=marketGame.replay(undefined,warmup);assert.equal(witnessed.valid,true);
+ const fleetMove={...move,expectedPosition:witnessed.stateHash};const arrived=marketGame.extend(witnessed.finalState,fleetMove);
+ const replay=marketGame.replay(undefined,[...warmup,fleetMove]);assert.equal(replay.valid,true);assert.equal(replay.stateHash,hashPosition(arrived.state));
  assert.throws(()=>marketGame.extend(s,{...move,expectedPosition:'another-position'}),/another position/);
  for(const decision of Object.values(result.state.decisions)){
   const {id,...body}=decision;assert.equal(id,hashPosition(body));
