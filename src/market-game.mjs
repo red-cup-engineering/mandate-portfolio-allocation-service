@@ -159,6 +159,7 @@ export function planMarket(state, policy, at) {
   // Every funded strategy needs measured confidence, regardless of method
   // name or whether prediction-market conditioning metadata is present.
   {
+    if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
     if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
     if (!Number.isFinite(calibration.confidenceLowerBound) || calibration.confidenceLowerBound<=0
         || !Number.isFinite(calibration.netReturnConfidenceLowerBound) || calibration.netReturnConfidenceLowerBound<=0)
@@ -192,7 +193,7 @@ export function planMarket(state, policy, at) {
       if (!evidenceOK(strategy.evidenceIds)) { refuse('future or missing strategy evidence'); continue; }
       if (!fresh(q) || !state.accounts[q?.venue]) { refuse('quote/account absent or stale'); continue; }
       if (time(q.horizon) !== time(f.horizon)) { refuse('payoff horizon differs from the common scenarios'); continue; }
-      if (f.conditioning && q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
+      if (q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
       if (q.stale || q.availableUnits < q.unitStep) { refuse('no known executable liquidity'); continue; }
       if (q.venue === 'alpaca' && !['us_equity', 'crypto'].includes(q.assetClass)) { refuse('Alpaca asset class required'); continue; }
       if (seen.has(id)) { refuse('same liquidity already claimed by another strategy'); continue; }
