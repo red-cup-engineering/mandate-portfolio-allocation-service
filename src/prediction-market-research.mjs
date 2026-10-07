@@ -30,3 +30,18 @@ const study=fitScenarioStudy({rows,source,path:['signals',ticker,'rawMidpoint'],
 return {kind:'prediction-market-financial-strategy-study/v1',design:{signal:ticker,signalFeature:'unadjusted contract best-bid/ask midpoint',asset:'ETH-USD',windowDays:90,trainFraction:0.6,maximumSpread:0.1,minimumDailyVolume:0,maximumSignalAgeSeconds:86400,historicalAvailabilityAssumption:'Kalshi completed candle plus five minutes; actual historical delivery latency is unobserved',executionAssumption:'Coinbase daily first and last trade prices; venue fills, spread and Base gas are not observed; cost is an assumption',exploratory:true,causalClaim:false,reference:'https://www.federalreserve.gov/econres/feds/files/2026010pap.pdf'},sources:[kalshi,eth],rows,study};
 
 }
+
+/** Acquire the signal BEFORE the asset mark. These are prospective public
+ * observations, never retrospective entry prices, fills or confidence. */
+export async function observePredictionMarketStrategy({market='KXFED-26OCT-T4.25',now=Date.now(),fetchImpl=fetch}={}) {
+ if(!/^KXFED-\d{2}[A-Z]{3}-T\d+(?:\.\d+)?$/.test(market)||!Number.isFinite(now))throw new TypeError('declared-market-and-observation-clock-required');
+ const signal=await readPublicObservation({source:`https://api.elections.kalshi.com/trade-api/v2/markets/${market}`,externalId:market,retainResponse:true},{fetchImpl,now:new Date(now).toISOString()});
+ const m=signal.observation.value.market;
+ const bid=Number(m?.yes_bid_dollars),ask=Number(m?.yes_ask_dollars);
+ if(m?.ticker!==market||m.status!=='active'||m.yes_bid_dollars==null||m.yes_ask_dollars==null||!Number.isFinite(bid)||!Number.isFinite(ask)||bid<0||ask>1||bid>ask||ask-bid>0.1||!(Date.parse(m.close_time)>Date.parse(signal.observation.observedAt)))throw new TypeError('active-bounded-signal-price-required');
+ const asset=await readPublicObservation({source:'https://api.exchange.coinbase.com/products/ETH-USD/ticker',externalId:'ETH-USD',retainResponse:true},{fetchImpl,now:signal.observation.observedAt});
+ const ticker=asset.observation.value,assetBid=Number(ticker.bid),assetAsk=Number(ticker.ask);
+ if(ticker.bid==null||ticker.ask==null||!Number.isFinite(assetBid)||!Number.isFinite(assetAsk)||!(assetBid>0)||assetAsk<assetBid)throw new TypeError('positive-uncrossed-asset-price-required');
+ const body={kind:'prediction-market-prospective-observation/v1',market,asset:'ETH-USD',featureAt:signal.observation.observedAt,observedAt:asset.observation.observedAt,rawMidpoint:(bid+ask)/2,signalBid:bid,signalAsk:ask,assetBid,assetAsk,sources:[signal,asset],interpretation:'observed signal followed by indicative public asset quotes; no fills or outcome',eligibleForLiveUse:false};
+ return {id:hashPosition(body),...body};
+}
