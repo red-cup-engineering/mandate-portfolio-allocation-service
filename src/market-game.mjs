@@ -30,6 +30,10 @@ function extend(state, move) {
       const row = move.account; venue(row.venue); time(row.observedAt);
       money(row.equityCents); money(row.freeCashCents); money(row.reservedCents ?? 0);
       if (row.freeCashCents > row.equityCents) throw new RangeError('deployable cash exceeds equity; borrowing is not equity');
+      for (const [instrument, holding] of Object.entries(row.inventory ?? {})) {
+        name(instrument); nonnegative(holding.units, 'held inventory units'); nonnegative(holding.availableUnits, 'available inventory units');
+        if (!(finite(holding.markPrice, 'inventory mark') > 0) || holding.availableUnits > holding.units) throw new RangeError('inventory availability or mark invalid');
+      }
       next = { ...state, accounts: put(state.accounts, row.venue, row) }; break;
     }
     case 'quote': {
@@ -42,6 +46,11 @@ function extend(state, move) {
       if (!['yes', 'no', 'long', 'short'].includes(row.side)) throw new TypeError('quote side required');
       if (row.carrier === 'asset' && row.side !== 'long') throw new TypeError('shorts require a collateral payoff model');
       if (row.carrier === 'binary' && (!['yes', 'no'].includes(row.side) || row.entryPrice >= 1)) throw new TypeError('binary entry must be a YES/NO price below one dollar');
+      if (row.funding !== undefined) {
+        if (row.venue !== 'evm') throw new TypeError('inventory exchanges require an EVM venue consumer');
+        name(row.funding.instrument);
+        if (!(finite(row.funding.unitsPerUnit, 'funding units per acquired unit') > 0)) throw new RangeError('positive funding quantity required');
+      }
       next = { ...state, quotes: put(state.quotes, row.id, row) }; break;
     }
     case 'strategy': {
@@ -164,28 +173,43 @@ export function planMarket(state, policy, at) {
       if (seen.has(id)) { refuse('same liquidity already claimed by another strategy'); continue; }
       if (q.venue === 'evm' && (!Number.isSafeInteger(q.chainId) || !q.blockHash || !q.finalized || !q.protocol)) { refuse('EVM quote lacks finalized chain/protocol identity'); continue; }
       if (q.venue === 'evm' && q.carrier === 'collateral' && (!(q.leverage > 0) || !Number.isFinite(q.leverage) || !q.collateralToken)) { refuse('collateral payoff requires leverage and token identity'); continue; }
+      if (q.funding && q.venue !== 'evm') throw new TypeError('inventory exchanges require an EVM venue consumer');
+      const holding = q.funding && state.accounts[q.venue].inventory?.[q.funding.instrument];
+      if (q.funding && (!holding || !(holding.availableUnits > 0))) { refuse('funding inventory absent or unavailable'); continue; }
+      if (q.funding && Math.abs(q.funding.unitsPerUnit * holding.markPrice - q.entryPrice) > 1e-9 * Math.max(1, q.entryPrice)) throw new RangeError('funding inventory mark differs from entry value');
       const capitalPerUnit = q.entryPrice * (1 + q.transitionCostFraction + q.carryCostFraction);
+      const fundingUnitsPerUnit = q.funding ? q.funding.unitsPerUnit * (1 + q.transitionCostFraction + q.carryCostFraction) : null;
       const returns = f.scenarios.map((s) => {
         // For collateral instruments each scenario states net payoff per unit
         // of collateral INCLUDING liquidation/ADL and protocol-specific effects.
         const value = finite(s.values[id], `scenario ${s.id} payoff ${id}`);
         if (q.carrier === 'binary' && (value < 0 || value > 1)) throw new RangeError('binary settlement value outside [0,1]');
         const payout = q.carrier === 'binary' && q.side === 'no' ? 1 - value : value;
-        return (payout - capitalPerUnit) / capitalPerUnit;
+        // The held funding asset is already in baseline wealth. Exchanging it
+        // removes its future value, including inventory reserved for costs.
+        const spent = q.funding ? fundingUnitsPerUnit * nonnegative(s.fundingValues?.[q.funding.instrument], `scenario ${s.id} funding value ${q.funding.instrument}`) : capitalPerUnit;
+        return (payout - spent) / capitalPerUnit;
       });
-      seen.add(id); candidates.push({ strategy, q, capitalPerUnit, returns });
+      seen.add(id); candidates.push({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns });
     }
   }
   const constraints = [];
   const add = (coefficients, cap) => constraints.push({ coefficients, cap });
-  for (const account of accounts) add(candidates.map(({ q }) => Number(q.venue === account.venue)), Math.max(0, account.freeCashCents - (policy.minCashCentsByVenue?.[account.venue] ?? 0)) / equity);
+  for (const account of accounts) {
+    add(candidates.map(({ q }) => Number(q.venue === account.venue && !q.funding)), Math.max(0, account.freeCashCents - (policy.minCashCentsByVenue?.[account.venue] ?? 0)) / equity);
+    for (const [instrument, holding] of Object.entries(account.inventory ?? {})) {
+      add(candidates.map(({ q, capitalPerUnit, fundingUnitsPerUnit }) => q.venue === account.venue && q.funding?.instrument === instrument ? fundingUnitsPerUnit * equity / (capitalPerUnit * 100) : 0), holding.availableUnits);
+    }
+  }
   for (const [i, { q, capitalPerUnit }] of candidates.entries()) {
     const cap = Math.min(nonnegative(policy.maxInstrumentFraction, 'instrument cap'), q.availableUnits * capitalPerUnit * 100 / equity);
     add(candidates.map((_, j) => Number(i === j)), cap);
   }
   for (const [factor, cap] of Object.entries(policy.factorCaps ?? {})) {
     const held = accounts.reduce((s, a) => s + nonnegative(a.factorExposureCents?.[factor] ?? 0, 'held factor exposure'), 0) / equity;
-    add(candidates.map(({ q }) => nonnegative(q.factors?.[factor] ?? 0, 'factor loading')), nonnegative(cap, 'factor cap') - held);
+    const loadings = candidates.map(({ q }) => q.funding ? finite(q.factors?.[factor] ?? 0, 'inventory exchange factor change') : nonnegative(q.factors?.[factor] ?? 0, 'factor loading'));
+    add(loadings, nonnegative(cap, 'factor cap') - held);
+    if (loadings.some(value => value < 0)) add(loadings.map(value => -value), held);
   }
   const maxLoss = nonnegative(policy.maxScenarioLossFraction, 'scenario loss');
   f.scenarios.forEach((s, k) => add(candidates.map((c) => -c.returns[k]), maxLoss + baseline[k] - 1));
@@ -193,7 +217,7 @@ export function planMarket(state, policy, at) {
   if (!sized.converged) throw new RangeError(`joint sizing did not converge (${sized.kktResidual})`);
   const multiple = nonnegative(policy.kellyMultiple, 'Kelly multiple'); if (multiple > 1) throw new RangeError('market plan requires Kelly multiple <= 1');
   const orders = [];
-  candidates.forEach(({ strategy, q, capitalPerUnit, returns }, i) => {
+  candidates.forEach(({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns }, i) => {
     const room = Math.floor(sized.fractions[i] * multiple * equity);
     const units = Math.floor(room / (capitalPerUnit * 100) / q.unitStep + 1e-10) * q.unitStep;
     if (units < q.unitStep) { skips.push({ strategy: strategy.id, id: q.id, reason: 'no funded edge under joint limits' }); return; }
@@ -203,6 +227,7 @@ export function planMarket(state, policy, at) {
       expectedReturn: returns.reduce((r, x, k) => r + f.scenarios[k].probability * x, 0), returns,
       ...(q.venue === 'evm' ? { chainId: q.chainId, blockHash: q.blockHash, protocol: q.protocol, ...(q.carrier === 'collateral' ? { leverage: q.leverage, collateralToken: q.collateralToken } : {}) } : {}),
       ...(q.venue === 'alpaca' ? { assetClass: q.assetClass } : {}),
+      ...(q.funding ? { funding: { instrument: q.funding.instrument, units: units * fundingUnitsPerUnit } } : {}),
       evidence: [...new Set([...strategy.evidenceIds, ...f.evidenceIds])].sort(), thesis: strategy.thesis, falsifier: strategy.falsifier });
   });
   // Monetary rounding and signed hedge returns can invalidate continuous limits.
