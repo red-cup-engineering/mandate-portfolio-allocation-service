@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {observePredictionMarketStrategy,resolveProspectiveStrategyRows} from '../src/prediction-market-research.mjs';
+import {observePredictionMarketStrategy,resolveProspectiveStrategyRows,studyProspectiveStrategy} from '../src/prediction-market-research.mjs';
 const market={ticker:'KXFED-26OCT-T4.25',status:'active',yes_bid_dollars:'0.30',yes_ask_dollars:'0.32',close_time:'2099-01-01T00:00:00Z'};
 function fetcher(signal=market,asset={bid:'2000',ask:'2001'}){
  const calls=[];return {calls,fetchImpl:async url=>{calls.push(String(url));return new Response(JSON.stringify(calls.length===1?{market:signal}:asset),{headers:{'content-type':'application/json'}});}};
@@ -39,4 +39,12 @@ test('mutated, future and mixed-market inputs cannot produce outcomes',()=>{
  assert.throws(()=>resolveProspectiveStrategyRows({observations:[acquired(2)],observedAt:acquired(1).observedAt}),/identified-causal/);
  const second=acquired(24),{id,...body}=second;body.market='KXFED-26DEC-T4.25';
  assert.throws(()=>resolveProspectiveStrategyRows({observations:[acquired(0),{id:hashPosition(body),...body}],observedAt:acquired(25).observedAt}),/one-declared/);
+});
+
+test('prospective assessment waits for resolved training and evaluation instead of fabricating a model',()=>{
+ const result=studyProspectiveStrategy({observations:[acquired(0),acquired(24)],observedAt:acquired(25).observedAt});assert.equal(result.status,'awaiting-resolved-outcomes');assert.equal(result.completedIntervals,1);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study,undefined);
+});
+test('resolved prospective assessment retains causal source rows and refuses unmeasured execution and repeated exploratory looks',()=>{
+ const observations=Array.from({length:141},(_,i)=>acquired(i*24,2000+i*2));const result=studyProspectiveStrategy({observations,observedAt:acquired(141*24).observedAt,roundTripCostFraction:0});
+ assert.equal(result.status,'studied');assert.equal(result.completedIntervals,140);assert.ok(result.study.scores.blockCount>=3);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study.scores.liveUseLimitations.length,2);assert.ok(result.study.scores.sourceObservationIds.includes('signal-0'));assert.ok(result.study.observations.every(row=>row.observation.source==='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study'));
 });

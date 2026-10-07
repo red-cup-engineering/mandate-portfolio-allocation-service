@@ -69,3 +69,17 @@ export function resolveProspectiveStrategyRows({observations,observedAt}) {
  }
  return {rows,observations:ordered.length,missedEndpoints,pendingEntry:entry?.id??null,design:{horizonSeconds:86400,maximumEndpointDelaySeconds:1200,entryRule:'earliest acquired observation, then each accepted endpoint; missed endpoint resets without a return',returnRule:'observed exit bid / observed entry ask - 1',scenarioRule:'public quote midpoint direction',fillsObserved:false,gasObserved:false}};
 }
+
+/** Prospective acquired quotes replace historical availability assumptions, but
+ * cannot attest fills, gas, independent review or a frozen evaluation protocol. */
+export function studyProspectiveStrategy({observations,observedAt,roundTripCostFraction=0.005}) {
+ const resolved=resolveProspectiveStrategyRows({observations,observedAt});
+ if(!Number.isFinite(roundTripCostFraction)||roundTripCostFraction<0||roundTripCostFraction>=1)throw new TypeError('bounded-explicit-research-cost-required');
+ const split=Math.floor(resolved.rows.length*0.6);
+ const evaluation=resolved.rows.slice(split);
+ const training=evaluation.length?resolved.rows.slice(0,split).filter(row=>Date.parse(row.outcomeAt)<Date.parse(evaluation[0].featureAt)):[];
+ if(training.length<10||evaluation.length<10)return {status:'awaiting-resolved-outcomes',completedIntervals:resolved.rows.length,trainingSamples:training.length,evaluationSamples:evaluation.length,eligibleForLiveUse:false};
+ const market=observations[0].market;
+ const study=fitScenarioStudy({rows:resolved.rows,source:`https://api.elections.kalshi.com/trade-api/v2/markets/${market}`,path:['signals',market,'rawMidpoint'],bins:[{lower:0,upper:0.25},{lower:0.25,upper:0.5},{lower:0.5,upper:0.75},{lower:0.75,upper:1.000001}],scenarios:['up','down'],roundTripCostFraction,observedAt,liveUseLimitations:['public indicative quotes do not attest venue fills or Base gas; additional cost is assumed','repeated exploratory temporal holdouts are not a frozen independently reviewed prospective test']});
+ return {status:'studied',market,completedIntervals:resolved.rows.length,study,eligibleForLiveUse:study.eligibleForLiveUse};
+}

@@ -5,7 +5,7 @@ const mean = values => values.reduce((a,b)=>a+b,0)/values.length;
 
 /** Fit a fixed binned likelihood on early resolved observations, then score
  * later observations exactly once. No tuning on the evaluation window. */
-export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFraction=0.6, blockSize=7, roundTripCostFraction, observedAt, producer='urn:561-group:lenticule-science', liveUseLimitations=[] }) {
+export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFraction=0.6, blockSize=7, roundTripCostFraction, observedAt, producer='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study', liveUseLimitations=[] }) {
   if (!Array.isArray(rows) || rows.length<20 || rows.length>20000 || !Array.isArray(bins) || bins.length<1 || bins.length>128 || !Array.isArray(scenarios) || scenarios.length!==2 || new Set(scenarios).size!==2) throw new TypeError('bounded-binary-scenario-study-required');
   if (!(trainFraction>=0.3 && trainFraction<=0.8) || !Number.isSafeInteger(blockSize) || blockSize<2 || !Number.isFinite(roundTripCostFraction) || roundTripCostFraction<0) throw new RangeError('fixed-study-design-required');
   if (bins.some((b,i)=>![b.lower,b.upper].every(Number.isFinite)||b.lower>=b.upper||(i && b.lower!==bins[i-1].upper))) throw new TypeError('ordered-contiguous-study-bins-required');
