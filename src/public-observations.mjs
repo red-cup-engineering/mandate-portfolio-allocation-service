@@ -89,5 +89,5 @@ export function kalshiMacroObservation(move, observedAt) {
     availableAt: parent.availableAt, observedAt,
     value: { kind: 'macro-state-price-bands', event, sourceObservationIds: [parent.id],
       interpretation: 'risk-neutral-threshold-bands-before-fees', bands,
-      signals: Object.fromEntries(bands.map(b => [b.ticker, { midpoint: (b.lower + b.upper) / 2, spread: b.upper - b.lower }])) } });
+      signals: Object.fromEntries(bands.map(b => [b.ticker, { midpoint: (b.lower + b.upper) / 2, spread: b.upper - b.lower, rawMidpoint: (b.bid + b.ask) / 2, rawSpread: b.ask - b.bid }])) } });
 }

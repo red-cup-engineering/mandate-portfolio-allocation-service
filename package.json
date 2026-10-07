@@ -10,7 +10,8 @@
     "./public-observations": "./src/public-observations.mjs",
     "./research-publication": "./src/research-publication.mjs",
     "./play": "./src/play.mjs",
-    "./scenario-study": "./src/scenario-study.mjs"
+    "./scenario-study": "./src/scenario-study.mjs",
+    "./prediction-market-research": "./src/prediction-market-research.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

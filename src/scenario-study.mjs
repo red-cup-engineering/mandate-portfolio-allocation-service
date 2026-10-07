@@ -5,10 +5,11 @@ const mean = values => values.reduce((a,b)=>a+b,0)/values.length;
 
 /** Fit a fixed binned likelihood on early resolved observations, then score
  * later observations exactly once. No tuning on the evaluation window. */
-export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFraction=0.6, blockSize=7, roundTripCostFraction, observedAt, producer='urn:561-group:lenticule-science' }) {
+export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFraction=0.6, blockSize=7, roundTripCostFraction, observedAt, producer='urn:561-group:lenticule-science', liveUseLimitations=[] }) {
   if (!Array.isArray(rows) || rows.length<20 || rows.length>20000 || !Array.isArray(bins) || bins.length<1 || bins.length>128 || !Array.isArray(scenarios) || scenarios.length!==2 || new Set(scenarios).size!==2) throw new TypeError('bounded-binary-scenario-study-required');
   if (!(trainFraction>=0.3 && trainFraction<=0.8) || !Number.isSafeInteger(blockSize) || blockSize<2 || !Number.isFinite(roundTripCostFraction) || roundTripCostFraction<0) throw new RangeError('fixed-study-design-required');
   if (bins.some((b,i)=>![b.lower,b.upper].every(Number.isFinite)||b.lower>=b.upper||(i && b.lower!==bins[i-1].upper))) throw new TypeError('ordered-contiguous-study-bins-required');
+  if(!Array.isArray(liveUseLimitations)||liveUseLimitations.length>16||liveUseLimitations.some(x=>typeof x!=='string'||!x.length||x.length>200))throw new TypeError('bounded-study-limitations-required');
   const bucket = value => bins.findIndex(b=>value>=b.lower && value<b.upper);
   const ordered=[...rows].sort((a,b)=>instant(a.featureAt)-instant(b.featureAt));
   const ids=new Set();
@@ -52,16 +53,16 @@ export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFra
   const returnBlocks=blockRows.map(rows=>mean(rows.map(p=>p.strategyReturn)));
   const returnVariance=m>1?returnBlocks.reduce((sum,x)=>sum+(x-mean(returnBlocks))**2,0)/(m-1):null;
   const netReturnConfidenceLowerBound=m>=3?mean(returnBlocks)-critical*Math.sqrt(returnVariance/m):null;
-  const scores={kind:'calibration',sampleSize:predictions.length,brier:mean(predictions.map(p=>p.brier)),baselineBrier:mean(predictions.map(p=>p.baselineBrier)),windowEnd:predictions.at(-1).outcomeAt,
+  const scores={kind:'calibration',liveUseLimitations:[...new Set(liveUseLimitations)].sort(),sampleSize:predictions.length,brier:mean(predictions.map(p=>p.brier)),baselineBrier:mean(predictions.map(p=>p.baselineBrier)),windowEnd:predictions.at(-1).outcomeAt,
     confidenceLowerBound,netReturnConfidenceLowerBound,blockCount:m,blockSize,method:'fixed-binned-likelihood-temporal-holdout/v2',blockUnit:'complete fixed UTC calendar blocks; non-overlapping asset returns',trainingSamples:training.length,
     sourceObservationIds:[...new Set(rows.flatMap(row=>row.evidenceIds))].sort(),rowDigest:hashPosition(ordered),
     grossSelectionRule:'daily round trip when fitted positive-return probability exceeds 0.5; otherwise cash',roundTripCostFraction,
     strategyMeanNetReturn:mean(predictions.map(p=>p.strategyReturn)),baselineDailyRoundTripMeanNetReturn:mean(predictions.map(p=>p.baselineDailyReturn)),
     scope:'exploratory single signal and asset; calendar-block approximation, no causal or cross-asset claim'};
   const scored=observation({source:producer,externalId:hashPosition(scores),availableAt:observedAt,observedAt,value:scores});
-  const calibration={sampleSize:scores.sampleSize,brier:scores.brier,baselineBrier:scores.baselineBrier,windowEnd:scores.windowEnd,record:scored.observation.id,confidenceLowerBound,netReturnConfidenceLowerBound};
+  const calibration={sampleSize:scores.sampleSize,brier:scores.brier,baselineBrier:scores.baselineBrier,windowEnd:scores.windowEnd,record:scored.observation.id,confidenceLowerBound,netReturnConfidenceLowerBound,liveUseLimitations:scores.liveUseLimitations};
   const specification={source,path,prior,bins:fittedBins,calibration};
   const model=observation({source:producer,externalId:hashPosition(specification),availableAt:observedAt,observedAt,value:{kind:'scenario-likelihood-model',model:specification}});
   return {id:hashPosition({scores,specification}),scores,predictions,prior,model:{evidenceId:model.observation.id,specification},observations:[scored,model],
-    eligibleForLiveUse:confidenceLowerBound!==null && confidenceLowerBound>0 && scores.brier<scores.baselineBrier && netReturnConfidenceLowerBound!==null && netReturnConfidenceLowerBound>0};
+    eligibleForLiveUse:liveUseLimitations.length===0 && confidenceLowerBound!==null && confidenceLowerBound>0 && scores.brier<scores.baselineBrier && netReturnConfidenceLowerBound!==null && netReturnConfidenceLowerBound>0};
 }

@@ -156,6 +156,7 @@ export function planMarket(state, policy, at) {
   const measured = state.observations[calibration.record]?.value;
   if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
   if (f.conditioning || ['fixed-binned-likelihood-temporal-holdout/v1','fixed-binned-likelihood-temporal-holdout/v2'].includes(measured.method)) {
+    if (measured.liveUseLimitations!==undefined && (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length))throw new RangeError('study has unresolved live-use limitations');
     if (!Number.isFinite(calibration.confidenceLowerBound) || calibration.confidenceLowerBound<=0
         || !Number.isFinite(calibration.netReturnConfidenceLowerBound) || calibration.netReturnConfidenceLowerBound<=0)
       throw new RangeError('conditioned financial strategy lacks positive measured calibration and net-return confidence');

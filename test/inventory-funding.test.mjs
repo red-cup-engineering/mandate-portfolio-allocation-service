@@ -31,3 +31,5 @@ test('removing conditioning metadata cannot bypass a scored study rejection',()=
  const s=state();s.observations.cal.value.method='fixed-binned-likelihood-temporal-holdout/v2';
  assert.throws(()=>planMarket(s,policy,at),/lacks positive measured/);
 });
+
+test('a conditioned plan cannot override recorded research limitations',()=>{const s=state();s.forecast.conditioning={model:'test-model'};s.forecast.calibration={...calibration,confidenceLowerBound:0.01,netReturnConfidenceLowerBound:0.01};s.observations.cal.value={...s.observations.cal.value,...s.forecast.calibration,liveUseLimitations:['venue fees were assumed']};assert.throws(()=>planMarket(s,policy,at),/unresolved live-use limitations/);});
