@@ -88,16 +88,32 @@ export function resolveProspectiveStrategyRows({observations,observedAt}) {
  return {rows,observations:ordered.length,missedEndpoints,pendingEntry:entry?.id??null,design:{horizonSeconds:86400,maximumEndpointDelaySeconds:1200,entryRule:'earliest acquired observation, then each accepted endpoint; missed endpoint resets without a return',returnRule:'observed exit bid / observed entry ask - 1',scenarioRule:'public quote midpoint direction',fillsObserved:false,gasObserved:false}};
 }
 
-/** Prospective acquired quotes replace historical availability assumptions, but
- * cannot attest fills, gas, independent review or a frozen evaluation protocol. */
-export function studyProspectiveStrategy({observations,observedAt,roundTripCostFraction=0.005}) {
- const resolved=resolveProspectiveStrategyRows({observations,observedAt});
- if(!Number.isFinite(roundTripCostFraction)||roundTripCostFraction<0||roundTripCostFraction>=1)throw new TypeError('bounded-explicit-research-cost-required');
- const split=Math.floor(resolved.rows.length*0.6);
- const evaluation=resolved.rows.slice(split);
- const training=evaluation.length?resolved.rows.slice(0,split).filter(row=>Date.parse(row.outcomeAt)<Date.parse(evaluation[0].featureAt)):[];
- if(training.length<10||evaluation.length<10)return {status:'awaiting-resolved-outcomes',completedIntervals:resolved.rows.length,trainingSamples:training.length,evaluationSamples:evaluation.length,eligibleForLiveUse:false};
- const market=observations[0].market;
- const study=fitScenarioStudy({rows:resolved.rows,source:`https://api.elections.kalshi.com/trade-api/v2/markets/${market}`,path:['signals',market,'rawMidpoint'],bins:[{lower:0,upper:0.25},{lower:0.25,upper:0.5},{lower:0.5,upper:0.75},{lower:0.75,upper:1.000001}],scenarios:['up','down'],roundTripCostFraction,observedAt,liveUseLimitations:['public indicative quotes do not attest venue fills or Base gas; additional cost is assumed','repeated exploratory temporal holdouts are not a frozen independently reviewed prospective test']});
- return {status:'studied',market,completedIntervals:resolved.rows.length,study,eligibleForLiveUse:study.eligibleForLiveUse};
+/** Register fixed future windows before any included asset outcome is known.
+ * Contract lifetime can make a proposed experiment infeasible; never shorten
+ * its evaluation window after observing outcomes. */
+export function createProspectiveProtocol({market,registeredAt,closeTime,roundTripCostFraction=0.005}) {
+ const at=Date.parse(registeredAt),close=Date.parse(closeTime);
+ if(!/^KXFED-\d{2}[A-Z]{3}-T\d+(?:\.\d+)?$/.test(market)||!Number.isFinite(at)||!Number.isFinite(close)||!(roundTripCostFraction>=0&&roundTripCostFraction<1))throw new TypeError('declared-prospective-protocol-required');
+ const start=(Math.floor(at/86400000)+1)*86400000,trainingEnd=start+21*86400000,evaluationStart=trainingEnd+86400000,evaluationEnd=evaluationStart+28*86400000;
+ const body={kind:'prediction-market-prospective-protocol/v1',market,asset:'ETH-USD',registeredAt,closeTime,trainingStart:new Date(start).toISOString(),trainingEnd:new Date(trainingEnd).toISOString(),evaluationStart:new Date(evaluationStart).toISOString(),evaluationEnd:new Date(evaluationEnd).toISOString(),roundTripCostFraction,bins:[{lower:0,upper:0.25},{lower:0.25,upper:0.5},{lower:0.5,upper:0.75},{lower:0.75,upper:1.000001}],scenarios:['up','down'],blockSize:7,feasible:close>evaluationEnd,implementationDigests:{fit:hashPosition(fitScenarioStudy.toString()),resolve:hashPosition(resolveProspectiveStrategyRows.toString()),verify:hashPosition(verifyProspectiveSources.toString()),acquire:hashPosition(observePredictionMarketStrategy.toString())},independentlyAccepted:false};
+ return {id:hashPosition(body),...body};
+}
+
+/** Repeated looks wait for the same frozen endpoint. They never change training,
+ * choose a winner, or refit an expanding holdout into live permission. */
+export function studyProspectiveStrategy({observations,observedAt,protocol}) {
+ const {id,...body}=protocol??{};
+ const expected=createProspectiveProtocol({market:body.market,registeredAt:body.registeredAt,closeTime:body.closeTime,roundTripCostFraction:body.roundTripCostFraction});
+ if(id!==hashPosition(body)||id!==expected.id||Date.parse(body.registeredAt)>Date.parse(observedAt))throw new TypeError('unchanged-preregistered-prospective-protocol-required');
+ if(observations.some(row=>row.market!==body.market))throw new TypeError('protocol-market-mismatch');
+ if(!body.feasible)return {status:'contract-lifetime-insufficient',protocolId:id,eligibleForLiveUse:false};
+ const resolved=resolveProspectiveStrategyRows({observations:observations.filter(row=>Date.parse(row.observedAt)>=Date.parse(body.trainingStart)),observedAt});
+ const training=resolved.rows.filter(row=>Date.parse(row.entryAt)>=Date.parse(body.trainingStart)&&Date.parse(row.outcomeAt)<=Date.parse(body.trainingEnd));
+ const evaluation=resolved.rows.filter(row=>Date.parse(row.featureAt)>=Date.parse(body.evaluationStart)&&Date.parse(row.outcomeAt)<=Date.parse(body.evaluationEnd));
+ const summary={protocolId:id,completedIntervals:resolved.rows.length,trainingSamples:training.length,evaluationSamples:evaluation.length,eligibleForLiveUse:false};
+ if(Date.parse(observedAt)<Date.parse(body.evaluationEnd))return {status:'awaiting-frozen-evaluation-end',...summary};
+ if(training.length<10||evaluation.length<10)return {status:'insufficient-frozen-outcomes',...summary};
+ const market=body.market;
+ const study=fitScenarioStudy({rows:[...training,...evaluation],source:`https://api.elections.kalshi.com/trade-api/v2/markets/${market}`,path:['signals',market,'rawMidpoint'],bins:body.bins,scenarios:body.scenarios,blockSize:body.blockSize,evaluationWindow:{start:body.evaluationStart,end:body.evaluationEnd},roundTripCostFraction:body.roundTripCostFraction,observedAt,liveUseLimitations:['public indicative quotes do not attest venue fills or Base gas; additional cost is assumed','frozen protocol and result have not been accepted by an independently authorized receiver']});
+ return {status:'studied',market,...summary,study,eligibleForLiveUse:study.eligibleForLiveUse};
 }

@@ -5,7 +5,7 @@ const mean = values => values.reduce((a,b)=>a+b,0)/values.length;
 
 /** Fit a fixed binned likelihood on early resolved observations, then score
  * later observations exactly once. No tuning on the evaluation window. */
-export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFraction=0.6, blockSize=7, roundTripCostFraction, observedAt, producer='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study', liveUseLimitations=[] }) {
+export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFraction=0.6, evaluationWindow, blockSize=7, roundTripCostFraction, observedAt, producer='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study', liveUseLimitations=[] }) {
   if (!Array.isArray(rows) || rows.length<20 || rows.length>20000 || !Array.isArray(bins) || bins.length<1 || bins.length>128 || !Array.isArray(scenarios) || scenarios.length!==2 || new Set(scenarios).size!==2) throw new TypeError('bounded-binary-scenario-study-required');
   if (!(trainFraction>=0.3 && trainFraction<=0.8) || !Number.isSafeInteger(blockSize) || blockSize<2 || !Number.isFinite(roundTripCostFraction) || roundTripCostFraction<0) throw new RangeError('fixed-study-design-required');
   if (bins.some((b,i)=>![b.lower,b.upper].every(Number.isFinite)||b.lower>=b.upper||(i && b.lower!==bins[i-1].upper))) throw new TypeError('ordered-contiguous-study-bins-required');
@@ -20,8 +20,10 @@ export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFra
   }
   const chronological=[...ordered].sort((a,b)=>instant(a.entryAt)-instant(b.entryAt));
   for(let i=1;i<chronological.length;i++)if(instant(chronological[i].entryAt)<instant(chronological[i-1].outcomeAt))throw new RangeError('overlapping-asset-return-observations-refused');
-  const split=Math.floor(ordered.length*trainFraction), evaluation=ordered.slice(split);
-  const training=ordered.slice(0,split).filter(row=>instant(row.outcomeAt)<instant(evaluation[0].featureAt));
+  if(evaluationWindow && (!(instant(evaluationWindow.start)<instant(evaluationWindow.end))||instant(evaluationWindow.end)>instant(observedAt)))throw new RangeError('completed-fixed-evaluation-window-required');
+  const split=Math.floor(ordered.length*trainFraction);
+  const evaluation=evaluationWindow?ordered.filter(row=>instant(row.featureAt)>=instant(evaluationWindow.start)&&instant(row.outcomeAt)<=instant(evaluationWindow.end)):ordered.slice(split);
+  const training=evaluationWindow?ordered.filter(row=>instant(row.outcomeAt)<instant(evaluationWindow.start)):ordered.slice(0,split).filter(row=>instant(row.outcomeAt)<instant(evaluation[0].featureAt));
   if(training.length<10 || evaluation.length<10)throw new RangeError('resolved-training-and-evaluation-required');
   const counts=Object.fromEntries(scenarios.map(s=>[s,Array(bins.length).fill(1)]));
   for(const row of training)counts[row.scenario][bucket(row.value)]++;
@@ -58,7 +60,7 @@ export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFra
   const returnBlocks=blockRows.map(rows=>mean(rows.map(p=>p.strategyReturn)));
   const returnVariance=m>1?returnBlocks.reduce((sum,x)=>sum+(x-mean(returnBlocks))**2,0)/(m-1):null;
   const netReturnConfidenceLowerBound=m>=3?mean(returnBlocks)-critical*Math.sqrt(returnVariance/m):null;
-  const scores={kind:'calibration',liveUseLimitations:[...new Set(liveUseLimitations)].sort(),sampleSize:predictions.length,brier:mean(predictions.map(p=>p.brier)),baselineBrier:mean(predictions.map(p=>p.baselineBrier)),windowEnd:predictions.at(-1).outcomeAt,
+  const scores={kind:'calibration',...(evaluationWindow?{evaluationWindow:{...evaluationWindow}}:{}),liveUseLimitations:[...new Set(liveUseLimitations)].sort(),sampleSize:predictions.length,brier:mean(predictions.map(p=>p.brier)),baselineBrier:mean(predictions.map(p=>p.baselineBrier)),windowEnd:predictions.at(-1).outcomeAt,
     confidenceLowerBound,netReturnConfidenceLowerBound,blockCount:m,blockSize,method:'fixed-binned-likelihood-and-return-temporal-holdout/v3',blockUnit:'complete fixed UTC calendar blocks; non-overlapping asset returns',trainingSamples:training.length,
     sourceObservationIds:[...new Set(rows.flatMap(row=>row.evidenceIds))].sort(),rowDigest:hashPosition(ordered),
     grossSelectionRule:'daily round trip when the bin mean asset return estimated from training exceeds the declared round-trip cost; otherwise cash',roundTripCostFraction,

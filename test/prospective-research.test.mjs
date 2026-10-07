@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {observePredictionMarketStrategy,resolveProspectiveStrategyRows,studyProspectiveStrategy} from '../src/prediction-market-research.mjs';
+import {observePredictionMarketStrategy,resolveProspectiveStrategyRows,studyProspectiveStrategy,createProspectiveProtocol} from '../src/prediction-market-research.mjs';
 const market={ticker:'KXFED-26OCT-T4.25',status:'active',yes_bid_dollars:'0.30',yes_ask_dollars:'0.32',close_time:'2099-01-01T00:00:00Z'};
 function fetcher(signal=market,asset={bid:'2000',ask:'2001'}){
  const calls=[];return {calls,fetchImpl:async url=>{calls.push(String(url));return new Response(JSON.stringify(calls.length===1?{market:signal}:asset),{headers:{'content-type':'application/json'}});}};
@@ -44,11 +44,11 @@ test('mutated, future and mixed-market inputs cannot produce outcomes',()=>{
 });
 
 test('prospective assessment waits for resolved training and evaluation instead of fabricating a model',()=>{
- const result=studyProspectiveStrategy({observations:[acquired(0),acquired(24)],observedAt:acquired(25).observedAt});assert.equal(result.status,'awaiting-resolved-outcomes');assert.equal(result.completedIntervals,1);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study,undefined);
+ const protocol=createProspectiveProtocol({market:market.ticker,registeredAt:'2026-09-30T00:00:00Z',closeTime:market.close_time});const result=studyProspectiveStrategy({observations:[acquired(0),acquired(24)],observedAt:acquired(25).observedAt,protocol});assert.equal(result.status,'awaiting-frozen-evaluation-end');assert.equal(result.completedIntervals,1);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study,undefined);
 });
 test('resolved prospective assessment retains causal source rows and refuses unmeasured execution and repeated exploratory looks',()=>{
- const observations=Array.from({length:141},(_,i)=>acquired(i*24,2000+i*2));const result=studyProspectiveStrategy({observations,observedAt:acquired(141*24).observedAt,roundTripCostFraction:0});
- assert.equal(result.status,'studied');assert.equal(result.completedIntervals,140);assert.ok(result.study.scores.blockCount>=3);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study.scores.liveUseLimitations.length,2);assert.ok(result.study.scores.sourceObservationIds.includes(acquired(0).sources[0].observation.id));assert.ok(result.study.observations.every(row=>row.observation.source==='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study'));
+ const protocol=createProspectiveProtocol({market:market.ticker,registeredAt:'2026-09-30T00:00:00Z',closeTime:market.close_time,roundTripCostFraction:0});const observations=Array.from({length:141},(_,i)=>acquired(i*24,2000+i*2));const result=studyProspectiveStrategy({observations,observedAt:acquired(141*24).observedAt,protocol});
+ assert.equal(result.status,'studied');assert.equal(result.completedIntervals,140);assert.ok(result.study.scores.blockCount>=3);assert.equal(result.eligibleForLiveUse,false);assert.equal(result.study.scores.liveUseLimitations.length,2);assert.ok(result.study.scores.sourceObservationIds.includes(acquired(24).sources[0].observation.id));assert.ok(result.study.observations.every(row=>row.observation.source==='urn:red-cup-engineering:mandate-portfolio-allocation-service:scenario-study'));
 });
 
 test('rehashing an outer record cannot detach prices or provenance from retained responses',()=>{
@@ -57,4 +57,13 @@ test('rehashing an outer record cannot detach prices or provenance from retained
   const row=structuredClone(acquired(0));mutate(row);assert.throws(()=>resolveProspectiveStrategyRows({observations:[rehash(row)],observedAt:acquired(1).observedAt}),/prospective-source/);
  }
  const row=structuredClone(acquired(0));row.sources[1].observation.value.bid='1';const {id,...source}=row.sources[1].observation;row.sources[1].observation={id:hashPosition(source),...source};assert.throws(()=>resolveProspectiveStrategyRows({observations:[rehash(row)],observedAt:acquired(1).observedAt}),/source-value-mismatch/);
+});
+
+test('preregistered windows cannot move with new outcomes, edits or contract lifetime',()=>{
+ const protocol=createProspectiveProtocol({market:market.ticker,registeredAt:'2026-09-30T00:00:00Z',closeTime:market.close_time});
+ const observations=Array.from({length:80},(_,i)=>acquired(i*24,2000+i));
+ const first=studyProspectiveStrategy({protocol,observations:observations.slice(0,60),observedAt:acquired(61*24).observedAt}),later=studyProspectiveStrategy({protocol,observations,observedAt:acquired(81*24).observedAt});assert.deepEqual(first.study.predictions,later.study.predictions);assert.deepEqual(first.study.model.specification.expectedReturns,later.study.model.specification.expectedReturns);assert.equal(first.study.observations[0].observation.observedAt,acquired(61*24).observedAt);assert.equal(first.study.scores.rowDigest,later.study.scores.rowDigest);
+ const {id,...changed}=protocol;changed.roundTripCostFraction=0;assert.throws(()=>studyProspectiveStrategy({protocol:{id,...changed},observations,observedAt:acquired(81*24).observedAt}),/unchanged-preregistered/);
+ const edited={...changed,id:hashPosition(changed)};assert.throws(()=>studyProspectiveStrategy({protocol:edited,observations,observedAt:'2026-09-01T00:00:00Z'}),/unchanged-preregistered/);
+ const short=createProspectiveProtocol({market:market.ticker,registeredAt:'2026-09-30T00:00:00Z',closeTime:'2026-10-28T00:00:00Z'});assert.equal(studyProspectiveStrategy({protocol:short,observations:[],observedAt:'2026-10-01T00:00:00Z'}).status,'contract-lifetime-insufficient');
 });
