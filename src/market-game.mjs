@@ -143,6 +143,31 @@ export function strategyPerformance(state) {
   return by;
 }
 
+// Calibration belongs to a particular payoff, not just a probability vector.
+// Inventory exchanges include what is surrendered; collateral includes leverage.
+function payoffTarget(quote){
+  return {venue:quote.venue,instrument:quote.instrument,carrier:quote.carrier,side:quote.side,fundingInstrument:quote.funding?.instrument??null,
+    ...(quote.venue==='alpaca'?{assetClass:quote.assetClass}:{}),
+    ...(quote.venue==='evm'?{chainId:quote.chainId,protocol:quote.protocol,...(quote.carrier==='collateral'?{leverage:quote.leverage,collateralToken:quote.collateralToken}:{})}:{})};
+}
+function scoredPayoffScopes(measured){
+  const scopes=measured.payoffScopes;
+  if(!Array.isArray(scopes)||!scopes.length||scopes.length>128)throw new TypeError('scored payoff scopes required');
+  for(const scope of scopes){
+    const target=scope?.target;
+    if(!target||typeof target!=='object'||Array.isArray(target)||!Number.isSafeInteger(scope.minHoldingPeriodMs)||scope.minHoldingPeriodMs<=0||!Number.isSafeInteger(scope.maxHoldingPeriodMs)||scope.maxHoldingPeriodMs<scope.minHoldingPeriodMs)throw new TypeError('scored payoff scope requires a target and positive measured holding-period bounds');
+    venue(target.venue);name(target.instrument);
+    if(!['binary','asset','collateral'].includes(target.carrier)||!(target.carrier==='binary'?['yes','no']:target.carrier==='asset'?['long']:['long','short']).includes(target.side))throw new TypeError('scored payoff carrier and side required');
+    if(target.fundingInstrument!==null){name(target.fundingInstrument);if(target.venue!=='evm')throw new TypeError('scored funding inventory requires EVM');}
+    if(target.venue==='alpaca'&&!['us_equity','crypto'].includes(target.assetClass))throw new TypeError('scored Alpaca asset class required');
+    if(target.venue==='evm'){
+      if(!Number.isSafeInteger(target.chainId)||target.chainId<=0)throw new TypeError('scored EVM chain required');name(target.protocol);
+      if(target.carrier==='collateral'){if(!(finite(target.leverage,'scored leverage')>0))throw new RangeError('positive scored leverage required');name(target.collateralToken);}
+    }
+  }
+  return scopes;
+}
+
 /** Joint scenarios carry common-factor dependence across all three venues.
  * Limits act on funded capital; they do not imply fungible venue cash or atomic
  * cross-venue execution. Existing holdings enter every scenario explicitly.
@@ -183,6 +208,7 @@ export function planMarket(state, policy, at) {
         || measured.roundTripCostFraction < 0) throw new TypeError('conditioned strategy requires the scored training-bin return and cost');
     if (!(fitted.gross > measured.roundTripCostFraction)) throw new RangeError('scored training-bin selection requires cash');
   }
+  const payoffScopes=scoredPayoffScopes(measured),holdingPeriodMs=time(f.horizon)-now;
   const accounts = Object.values(state.accounts).sort((a, b) => a.venue.localeCompare(b.venue));
   if (!accounts.length || accounts.some((a) => !fresh(a))) throw new RangeError('fresh account readings required');
   const principal = name(policy.principal);
@@ -198,6 +224,7 @@ export function planMarket(state, policy, at) {
       if (!evidenceOK(strategy.evidenceIds)) { refuse('future or missing strategy evidence'); continue; }
       if (!fresh(q) || !state.accounts[q?.venue]) { refuse('quote/account absent or stale'); continue; }
       if (time(q.horizon) !== time(f.horizon)) { refuse('payoff horizon differs from the common scenarios'); continue; }
+      if (!payoffScopes.some(scope=>holdingPeriodMs>=scope.minHoldingPeriodMs&&holdingPeriodMs<=scope.maxHoldingPeriodMs&&hashPosition(scope.target)===hashPosition(payoffTarget(q)))) { refuse('candidate differs from the scored payoff scope or holding period'); continue; }
       if (q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
       if (q.stale || q.availableUnits < q.unitStep) { refuse('no known executable liquidity'); continue; }
       if (q.venue === 'alpaca' && !['us_equity', 'crypto'].includes(q.assetClass)) { refuse('Alpaca asset class required'); continue; }

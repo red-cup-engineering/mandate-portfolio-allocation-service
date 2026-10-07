@@ -6,8 +6,9 @@ import {formAggressivePortfolioIntent} from '../../alpha-portfolio-order-intent-
 import {validateExecutionRequest} from '../../brokerage-execution-transport-service/src/execute-intent.mjs';
 const at='2026-10-07T02:00:00Z',horizon='2026-10-08T02:00:00Z';
 const calibration={sampleSize:100,brier:0.1,baselineBrier:0.2,record:'cal',windowEnd:'2026-10-01T00:00:00Z',confidenceLowerBound:0.01,netReturnConfidenceLowerBound:0.01,liveUseLimitations:[]};
+const swapScope={target:{venue:'evm',instrument:'USDC',carrier:'asset',side:'long',fundingInstrument:'ETH',chainId:8453,protocol:'test-only'},minHoldingPeriodMs:86400000-60000,maxHoldingPeriodMs:86400000};
 const policy={principal:'synthetic-principal',minCalibrationSamples:20,maxDeployFraction:1,maxInstrumentFraction:1,maxScenarioLossFraction:0.9,maxObservationAgeMs:60000,kellyMultiple:1};
-function state(availableUnits=1){return {observations:{cal:{observedAt:at,availableAt:at,value:{kind:'calibration',roundTripCostFraction:0.005,...calibration}},research:{observedAt:at,availableAt:at,value:{kind:'synthetic-test-only'}}},accounts:{evm:{venue:'evm',principal:'synthetic-principal',observedAt:at,equityCents:100,freeCashCents:0,inventory:{ETH:{units:1,availableUnits,markPrice:1}}}},quotes:{swap:{id:'swap',venue:'evm',instrument:'USDC',observedAt:at,horizon,entryPrice:1,unitStep:0.01,availableUnits:1,transitionCostFraction:0,carryCostFraction:0,carrier:'asset',side:'long',chainId:8453,blockHash:'0xblock',finalized:true,protocol:'test-only',funding:{instrument:'ETH',unitsPerUnit:1}}},strategies:{hedge:{id:'hedge',observedAt:at,quoteIds:['swap'],evidenceIds:['research'],thesis:'Exchange held exposure for stable value',falsifier:'Held units or horizon differ'}},forecast:{id:'f',observedAt:at,horizon,calibration:{...calibration},evidenceIds:['cal'],scenarios:[{id:'down',probability:0.5,values:{swap:1},fundingValues:{ETH:0.5},heldPnlCentsByVenue:{evm:-50}},{id:'up',probability:0.5,values:{swap:1},fundingValues:{ETH:1.5},heldPnlCentsByVenue:{evm:50}}]},decisions:{},outcomes:{}};}
+function state(availableUnits=1){return {observations:{cal:{observedAt:at,availableAt:at,value:{kind:'calibration',roundTripCostFraction:0.005,payoffScopes:[structuredClone(swapScope)],...calibration}},research:{observedAt:at,availableAt:at,value:{kind:'synthetic-test-only'}}},accounts:{evm:{venue:'evm',principal:'synthetic-principal',observedAt:at,equityCents:100,freeCashCents:0,inventory:{ETH:{units:1,availableUnits,markPrice:1}}}},quotes:{swap:{id:'swap',venue:'evm',instrument:'USDC',observedAt:at,horizon,entryPrice:1,unitStep:0.01,availableUnits:1,transitionCostFraction:0,carryCostFraction:0,carrier:'asset',side:'long',chainId:8453,blockHash:'0xblock',finalized:true,protocol:'test-only',funding:{instrument:'ETH',unitsPerUnit:1}}},strategies:{hedge:{id:'hedge',observedAt:at,quoteIds:['swap'],evidenceIds:['research'],thesis:'Exchange held exposure for stable value',falsifier:'Held units or horizon differ'}},forecast:{id:'f',observedAt:at,horizon,calibration:{...calibration},evidenceIds:['cal'],scenarios:[{id:'down',probability:0.5,values:{swap:1},fundingValues:{ETH:0.5},heldPnlCentsByVenue:{evm:-50}},{id:'up',probability:0.5,values:{swap:1},fundingValues:{ETH:1.5},heldPnlCentsByVenue:{evm:50}}]},decisions:{},outcomes:{}};}
 test('inventory exchange removes held exposure instead of counting another stablecoin purchase',()=>{
  const result=planMarket(state(),policy,at);assert.equal(result.orders.length,1);assert.ok(result.orders[0].funding.units>0.9);assert.ok(result.orders[0].funding.units<=1);assert.equal(result.orders[0].expectedReturn,0);
  for(const scenario of result.scenarioWealth)assert.ok(Math.abs(scenario.wealth-1)<0.06);
@@ -105,6 +106,7 @@ function mixedFleet(){
  const s=state();s.accounts.alpaca={venue:'alpaca',principal:'synthetic-personal-principal',observedAt:at,equityCents:500,freeCashCents:500};
  s.quotes.asset={id:'asset',venue:'alpaca',instrument:'TEST',assetClass:'us_equity',observedAt:at,horizon,entryPrice:1,unitStep:1,availableUnits:5,transitionCostFraction:0,carryCostFraction:0,carrier:'asset',side:'long'};
  s.strategies.hedge.quoteIds.push('asset');
+ s.observations.cal.value.payoffScopes.push({target:{venue:'alpaca',instrument:'TEST',carrier:'asset',side:'long',fundingInstrument:null,assetClass:'us_equity'},minHoldingPeriodMs:86400000-60000,maxHoldingPeriodMs:86400000});
  s.forecast.scenarios.forEach((scenario,index)=>{scenario.values.asset=index?1.5:0.9;scenario.heldPnlCentsByVenue.alpaca=0;});
  return s;
 }
@@ -136,4 +138,18 @@ test('fleet move records replayable per-principal decisions and requires every s
  for(const decision of Object.values(result.state.decisions)){
   const {id,...body}=decision;assert.equal(id,hashPosition(body));
  }
+});
+
+// Matching numeric confidence cannot stand in for a study of another payoff.
+test('scored payoff identity and holding period bind every candidate',()=>{
+ for(const changes of [{instrument:'UNSTUDIED'},{side:'short',carrier:'collateral',leverage:2,collateralToken:'TEST'},{chainId:42161},{protocol:'another-protocol'},{funding:{instrument:'WETH',unitsPerUnit:1}}]){
+  const s=state();Object.assign(s.quotes.swap,changes);
+  const result=planMarket(s,policy,at);assert.equal(result.orders.length,0);assert.match(result.skips[0].reason,/scored payoff scope/);
+ }
+ const delayed=state();delayed.forecast.horizon='2026-10-09T02:00:00Z';delayed.quotes.swap.horizon=delayed.forecast.horizon;
+ assert.equal(planMarket(delayed,policy,at).orders.length,0);
+ const unscoped=state();delete unscoped.observations.cal.value.payoffScopes;
+ assert.throws(()=>planMarket(unscoped,policy,at),/scored payoff scopes required/);
+ const s=mixedFleet();s.observations.cal.value.payoffScopes=[structuredClone(swapScope)];
+ const fleet=planFleet(s,[policy,personalPolicy],at);assert.ok(fleet.find(d=>d.principal===policy.principal).orders.length);assert.equal(fleet.find(d=>d.principal===personalPolicy.principal).orders.length,0);
 });

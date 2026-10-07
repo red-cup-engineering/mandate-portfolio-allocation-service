@@ -22,7 +22,6 @@ const play = (intent, stamp = at) => {
   position = result.state; return result;
 };
 const observe = (id, source, value, stamp = at) => play({ kind: 'observe', observation: { id, source, value, availableAt: stamp, observedAt: stamp } }, stamp);
-observe('example:calibration', 'urn:synthetic:scored-forecasts', { kind: 'calibration', ...calibration, roundTripCostFraction: .05 });
 observe('example:technology', 'urn:synthetic:issuer-release', { demand: 'growth', kind: 'news' });
 for (const venue of ['kalshi', 'alpaca', 'evm']) play({ kind: 'account', account: { venue, principal: 'synthetic-principal', observedAt: at, equityCents: 100000, freeCashCents: 100000, factorExposureCents: {} } });
 const quotes = [
@@ -30,6 +29,10 @@ const quotes = [
   { id: 'example:alpaca', venue: 'alpaca', instrument: 'EXAMPLE', carrier: 'asset', assetClass: 'us_equity', side: 'long', entryPrice: 100, availableUnits: 1000, unitStep: .001, factors: { technology: 1 } },
   { id: 'example:evm', venue: 'evm', instrument: market, carrier: 'collateral', side: 'long', entryPrice: 1, availableUnits: 10000, unitStep: .01, chainId: 42161, blockHash: `0x${'1'.repeat(64)}`, finalized: true, protocol: 'gmx', leverage: 1, collateralToken: GMX_CHAINS[42161].usdc, factors: { technology: 1, crypto: 1 } },
 ];
+// Fabricated, explicit measured targets for this synthetic demonstration only.
+const payoffScopes=quotes.map(q=>({target:{venue:q.venue,instrument:q.instrument,carrier:q.carrier,side:q.side,fundingInstrument:null,
+  ...(q.venue==='alpaca'?{assetClass:q.assetClass}:{}),...(q.venue==='evm'?{chainId:q.chainId,protocol:q.protocol,leverage:q.leverage,collateralToken:q.collateralToken}:{})},minHoldingPeriodMs:86400000-60000,maxHoldingPeriodMs:86400000}));
+observe('example:calibration', 'urn:synthetic:scored-forecasts', { kind: 'calibration', ...calibration, roundTripCostFraction: .05, payoffScopes });
 for (const quote of quotes) {
   play({ kind: 'quote', quote: { ...quote, observedAt: at, horizon, transitionCostFraction: .001, carryCostFraction: .001 } });
   play({ kind: 'strategy', strategy: { id: `strategy:${quote.venue}`, observedAt: at, quoteIds: [quote.id], evidenceIds: ['example:technology'], thesis: 'Synthetic technology/crypto scenario exposure', falsifier: 'Measured scenario model fails its baseline' } });
