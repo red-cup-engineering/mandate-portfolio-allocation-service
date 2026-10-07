@@ -80,6 +80,11 @@ function extend(state, move) {
       if (move.expectedPosition !== hashPosition(state)) throw new RangeError('decision was based on another position');
       next = { ...state, decisions: { ...state.decisions, [decision.id]: decision } }; break;
     }
+    case 'decide-fleet': {
+      if (move.expectedPosition !== hashPosition(state)) throw new RangeError('fleet decision was based on another position');
+      const decisions = planFleet(state, move.policies, move.at);
+      next = { ...state, decisions: { ...state.decisions, ...Object.fromEntries(decisions.map(decision => [decision.id, decision])) } }; break;
+    }
     case 'outcome': {
       const row = move.outcome; const d = state.decisions[row.decisionId];
       if (!d || !d.orders.some((o) => o.id === row.orderId)) throw new TypeError('outcome must reference a planned order');
@@ -90,7 +95,7 @@ function extend(state, move) {
     }
     default: throw new TypeError(`unknown market move ${move.kind}`);
   }
-  return { state: next, events: [{ kind: move.kind, polarity: ['strategy', 'forecast', 'decide'].includes(move.kind) ? 'P' : 'O' }] };
+  return { state: next, events: [{ kind: move.kind, polarity: ['strategy', 'forecast', 'decide', 'decide-fleet'].includes(move.kind) ? 'P' : 'O' }] };
 }
 
 export const marketGame = gameRules(initial, extend);
@@ -265,6 +270,32 @@ export function planMarket(state, policy, at) {
     scenarioWealth: f.scenarios.map((s, k) => ({ id: s.id, probability: s.probability, wealth: baseline[k] + candidates.reduce((sum, c, i) => sum + c.returns[k] * fractions[i], 0) })),
     sizing: { converged: sized.converged, kktResidual: sized.kktResidual }, performance: strategyPerformance(state), effect: 'intent-only' };
   return { id: hashPosition(body), ...body };
+}
+
+/** Shared information, separately funded principal decisions. The common
+ * scenarios never make another principal's cash, holdings or losses available.
+ * Each resulting decision remains consumable under its own current mandate. */
+export function planFleet(state, policies, at) {
+  const accounts = Object.values(state.accounts), principals = [...new Set(accounts.map(account => name(account.principal)))].sort();
+  if (!principals.length || !Array.isArray(policies) || policies.length !== principals.length) throw new TypeError('one policy per observed fleet principal required');
+  const byPrincipal = new Map();
+  for (const policy of policies) {
+    const principal = name(policy?.principal);
+    if (!principals.includes(principal) || byPrincipal.has(principal)) throw new TypeError('unique observed fleet principal policies required');
+    byPrincipal.set(principal, policy);
+  }
+  const fleetPosition = hashPosition(state);
+  return principals.map(principal => {
+    const ownAccounts = accounts.filter(account => account.principal === principal), venues = new Set(ownAccounts.map(account => account.venue));
+    const quotes = Object.fromEntries(Object.entries(state.quotes).filter(([,quote]) => venues.has(quote.venue)));
+    const strategies = Object.fromEntries(Object.entries(state.strategies).map(([id,strategy]) => [id,{...strategy,quoteIds:strategy.quoteIds.filter(id => Object.hasOwn(quotes,id))}]).filter(([,strategy]) => strategy.quoteIds.length));
+    const decisions = Object.fromEntries(Object.entries(state.decisions).filter(([,decision]) => decision.principal === principal));
+    const outcomes = Object.fromEntries(Object.entries(state.outcomes).filter(([,outcome]) => Object.hasOwn(decisions,outcome.decisionId)));
+    const position = {...state,accounts:Object.fromEntries(ownAccounts.map(account => [account.venue,account])),quotes,strategies,decisions,outcomes};
+    const {id,...body} = planMarket(position, byPrincipal.get(principal), at);
+    const decision = {...body,fleetPosition};
+    return {id:hashPosition(decision),...decision};
+  });
 }
 
 /** Venue consumers use the funded decision as a cap, with a matching horizon.

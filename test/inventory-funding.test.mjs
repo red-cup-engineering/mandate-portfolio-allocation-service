@@ -1,6 +1,7 @@
+import {hashPosition} from '@red-cup-engineering/gaming/running/rules';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planMarket,allocationsFor} from '../src/market-game.mjs';
+import {planMarket,planFleet,marketGame,allocationsFor} from '../src/market-game.mjs';
 import {formAggressivePortfolioIntent} from '../../alpha-portfolio-order-intent-service/src/aggressive-intent.mjs';
 import {validateExecutionRequest} from '../../brokerage-execution-transport-service/src/execute-intent.mjs';
 const at='2026-10-07T02:00:00Z',horizon='2026-10-08T02:00:00Z';
@@ -97,5 +98,39 @@ test('unconditioned selection cannot spend beyond the net-return study cost budg
  for(const value of [undefined,-1,NaN,Infinity]){
   s.observations.cal.value.roundTripCostFraction=value;
   assert.throws(()=>planMarket(s,policy,at),/scored nonnegative strategy cost budget/);
+ }
+});
+
+function mixedFleet(){
+ const s=state();s.accounts.alpaca={venue:'alpaca',principal:'synthetic-personal-principal',observedAt:at,equityCents:500,freeCashCents:500};
+ s.quotes.asset={id:'asset',venue:'alpaca',instrument:'TEST',assetClass:'us_equity',observedAt:at,horizon,entryPrice:1,unitStep:1,availableUnits:5,transitionCostFraction:0,carryCostFraction:0,carrier:'asset',side:'long'};
+ s.strategies.hedge.quoteIds.push('asset');
+ s.forecast.scenarios.forEach((scenario,index)=>{scenario.values.asset=index?1.5:0.9;scenario.heldPnlCentsByVenue.alpaca=0;});
+ return s;
+}
+const personalPolicy={...policy,principal:'synthetic-personal-principal'};
+test('one scenario family funds separate principals without pooling their capital or holdings',()=>{
+ const s=mixedFleet(),before=structuredClone(s);const fleet=planFleet(s,[personalPolicy,policy],at);
+ assert.deepEqual(s,before);assert.equal(fleet.length,2);
+ const group=fleet.find(d=>d.principal===policy.principal),personal=fleet.find(d=>d.principal===personalPolicy.principal);
+ assert.equal(group.equityCents,100);assert.equal(personal.equityCents,500);
+ assert.ok(group.orders.length&&personal.orders.length);
+ assert.ok(group.orders.every(o=>o.venue==='evm'));assert.ok(personal.orders.every(o=>o.venue==='alpaca'));
+ assert.equal(group.fleetPosition,hashPosition(s));assert.equal(personal.fleetPosition,group.fleetPosition);
+ const base=planMarket(state(),policy,at);assert.deepEqual(group.scenarioWealth,base.scenarioWealth);assert.deepEqual(group.orders,base.orders);
+ assert.throws(()=>allocationsFor(group,{venue:'evm',principal:personalPolicy.principal,instrument:'USDC',side:'long',chainId:8453,protocol:'test-only',at}),/another principal/);
+ s.accounts.alpaca.freeCashCents=0;
+ const unfunded=planFleet(s,[policy,personalPolicy],at);assert.equal(unfunded.find(d=>d.principal===personalPolicy.principal).orders.length,0);assert.deepEqual(unfunded.find(d=>d.principal===policy.principal).orders,group.orders);
+});
+test('fleet move records replayable per-principal decisions and requires every scoped policy',()=>{
+ const s=mixedFleet();
+ for(const policies of [[policy],[policy,policy],[policy,{...policy,principal:'unobserved-principal'}]])assert.throws(()=>planFleet(s,policies,at),/principal polic|per observed fleet principal/);
+ const move={kind:'decide-fleet',at,policies:[policy,personalPolicy],expectedPosition:hashPosition(s)};
+ const result=marketGame.extend(s,move);assert.equal(Object.keys(result.state.decisions).length,2);assert.equal(result.events[0].polarity,'P');
+ assert.deepEqual(marketGame.extend(s,move),result);
+ const replay=marketGame.replay(s,[move]);assert.equal(replay.valid,true);assert.equal(replay.stateHash,hashPosition(result.state));
+ assert.throws(()=>marketGame.extend(s,{...move,expectedPosition:'another-position'}),/another position/);
+ for(const decision of Object.values(result.state.decisions)){
+  const {id,...body}=decision;assert.equal(id,hashPosition(body));
  }
 });
