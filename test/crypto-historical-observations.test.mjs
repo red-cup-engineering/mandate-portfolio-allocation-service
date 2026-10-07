@@ -31,7 +31,9 @@ test("an exposed page token makes the evidence explicitly incomplete", () => {
     timeframe: "1Hour",
     start: "2026-09-07T00:00:00Z",
     end: "2026-10-07T00:00:00Z",
-    bars: Array.from({ length: 150 }, (_, i) => bar(2026, i)),
+    bars: Array.from({ length: 150 }, (_, i) =>
+      bar(new Date(Date.parse("2026-09-07T00:00:00Z") + i * 3600 * 1000), i),
+    ),
     nextPageToken: "opaque-token",
     now: "2026-10-07T00:01:00Z",
   });
