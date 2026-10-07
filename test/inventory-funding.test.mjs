@@ -22,7 +22,7 @@ test('no funding inventory or future funding valuation cannot create a funded or
 });
 
 test('conditioned portfolio decisions require positive measured financial confidence',()=>{
- const s=state();s.forecast.conditioning={model:'test-model'};s.forecast.calibration={...calibration,confidenceLowerBound:0.01,netReturnConfidenceLowerBound:-0.01};s.observations.cal.value={...s.observations.cal.value,...s.forecast.calibration};
+ const s=state();s.forecast.conditioning={model:'test-model',bin:0};s.forecast.evidenceIds.push('test-model');s.observations['test-model']={observedAt:at,availableAt:at,value:{kind:'scenario-likelihood-model',model:{expectedReturns:[{trainingSamples:50,gross:0.02}]}}};s.observations.cal.value.roundTripCostFraction=0.005;s.forecast.calibration={...calibration,confidenceLowerBound:0.01,netReturnConfidenceLowerBound:-0.01};s.observations.cal.value={...s.observations.cal.value,...s.forecast.calibration};
  assert.throws(()=>planMarket(s,policy,at),/lacks positive measured/);
  s.forecast.calibration.netReturnConfidenceLowerBound=0.01;
  assert.throws(()=>planMarket(s,policy,at),/differs from scored evidence/);
@@ -34,7 +34,7 @@ test('removing conditioning metadata cannot bypass a scored study rejection',()=
  assert.throws(()=>planMarket(s,policy,at),/lacks positive measured/);
 });
 
-test('a conditioned plan cannot override recorded research limitations',()=>{const s=state();s.forecast.conditioning={model:'test-model'};s.forecast.calibration={...calibration,confidenceLowerBound:0.01,netReturnConfidenceLowerBound:0.01};s.observations.cal.value={...s.observations.cal.value,...s.forecast.calibration,liveUseLimitations:['venue fees were assumed']};assert.throws(()=>planMarket(s,policy,at),/unresolved live-use limitations/);});
+test('a conditioned plan cannot override recorded research limitations',()=>{const s=state();s.forecast.conditioning={model:'test-model',bin:0};s.forecast.evidenceIds.push('test-model');s.observations['test-model']={observedAt:at,availableAt:at,value:{kind:'scenario-likelihood-model',model:{expectedReturns:[{trainingSamples:50,gross:0.02}]}}};s.observations.cal.value.roundTripCostFraction=0.005;s.forecast.calibration={...calibration,confidenceLowerBound:0.01,netReturnConfidenceLowerBound:0.01};s.observations.cal.value={...s.observations.cal.value,...s.forecast.calibration,liveUseLimitations:['venue fees were assumed']};assert.throws(()=>planMarket(s,policy,at),/unresolved live-use limitations/);});
 
 // Synthetic bounds here exercise admission only; they are not research evidence.
 test('every method and unconditioned forecast must retain measured financial confidence',()=>{
@@ -73,4 +73,17 @@ test('Alpaca intent formation and live execution reject another principal before
  const authorityGrant={type:'RevocableBrokerageAuthorityGrant',revoked:false,scopes:['orders:live'],principalContract:contract.id,validUntil:horizon};
  const intent={type:'AggressiveBrokerageOrderIntent',contract:contract.id,side:'buy',symbol:'TEST',notional:1,maximumLoss:1,marketDecision:decision};
  assert.throws(()=>validateExecutionRequest({contract,authorityGrant,intent,now:at}),/another principal/);
+});
+
+test('conditioning preserves the scored training-bin cash rule regardless of directional probabilities',()=>{
+ const s=state();s.forecast.conditioning={model:'test-model',bin:0};s.forecast.evidenceIds.push('test-model');
+ s.observations['test-model']={observedAt:at,availableAt:at,value:{kind:'scenario-likelihood-model',model:{expectedReturns:[{trainingSamples:50,gross:0.001}]}}};
+ s.observations.cal.value.roundTripCostFraction=0.005;
+ assert.throws(()=>planMarket(s,policy,at),/selection requires cash/);
+ s.observations['test-model'].value.model.expectedReturns[0].gross=0.02;
+ assert.equal(planMarket(s,policy,at).orders.length,1);
+ s.quotes.swap.transitionCostFraction=0.006;assert.equal(planMarket(s,policy,at).orders.length,0);assert.match(planMarket(s,policy,at).skips[0].reason,/scored strategy cost budget/);
+ s.quotes.swap.transitionCostFraction=0;
+ delete s.observations.cal.value.roundTripCostFraction;
+ assert.throws(()=>planMarket(s,policy,at),/scored training-bin return and cost/);
 });

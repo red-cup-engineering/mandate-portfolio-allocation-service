@@ -167,6 +167,16 @@ export function planMarket(state, policy, at) {
         || measured.netReturnConfidenceLowerBound!==calibration.netReturnConfidenceLowerBound)
       throw new TypeError('strategy confidence differs from scored evidence');
   }
+  if (f.conditioning) {
+    if (!f.evidenceIds.includes(f.conditioning.model) || !evidenceOK([f.conditioning.model])) throw new TypeError('conditioned selection model requires presently available forecast evidence');
+    const model = state.observations[f.conditioning.model]?.value;
+    const bin = f.conditioning.bin, fitted = model?.model?.expectedReturns?.[bin];
+    if (model?.kind !== 'scenario-likelihood-model' || !Number.isSafeInteger(bin) || bin < 0
+        || !Number.isSafeInteger(fitted?.trainingSamples) || fitted.trainingSamples < 1
+        || !Number.isFinite(fitted.gross) || !Number.isFinite(measured.roundTripCostFraction)
+        || measured.roundTripCostFraction < 0) throw new TypeError('conditioned strategy requires the scored training-bin return and cost');
+    if (!(fitted.gross > measured.roundTripCostFraction)) throw new RangeError('scored training-bin selection requires cash');
+  }
   const accounts = Object.values(state.accounts).sort((a, b) => a.venue.localeCompare(b.venue));
   if (!accounts.length || accounts.some((a) => !fresh(a))) throw new RangeError('fresh account readings required');
   const principal = name(policy.principal);
@@ -182,6 +192,7 @@ export function planMarket(state, policy, at) {
       if (!evidenceOK(strategy.evidenceIds)) { refuse('future or missing strategy evidence'); continue; }
       if (!fresh(q) || !state.accounts[q?.venue]) { refuse('quote/account absent or stale'); continue; }
       if (time(q.horizon) !== time(f.horizon)) { refuse('payoff horizon differs from the common scenarios'); continue; }
+      if (f.conditioning && q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
       if (q.stale || q.availableUnits < q.unitStep) { refuse('no known executable liquidity'); continue; }
       if (q.venue === 'alpaca' && !['us_equity', 'crypto'].includes(q.assetClass)) { refuse('Alpaca asset class required'); continue; }
       if (seen.has(id)) { refuse('same liquidity already claimed by another strategy'); continue; }

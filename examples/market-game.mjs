@@ -22,7 +22,7 @@ const play = (intent, stamp = at) => {
   position = result.state; return result;
 };
 const observe = (id, source, value, stamp = at) => play({ kind: 'observe', observation: { id, source, value, availableAt: stamp, observedAt: stamp } }, stamp);
-observe('example:calibration', 'urn:synthetic:scored-forecasts', { kind: 'calibration', ...calibration });
+observe('example:calibration', 'urn:synthetic:scored-forecasts', { kind: 'calibration', ...calibration, roundTripCostFraction: .05 });
 observe('example:technology', 'urn:synthetic:issuer-release', { demand: 'growth', kind: 'news' });
 for (const venue of ['kalshi', 'alpaca', 'evm']) play({ kind: 'account', account: { venue, principal: 'synthetic-principal', observedAt: at, equityCents: 100000, freeCashCents: 100000, factorExposureCents: {} } });
 const quotes = [
@@ -52,7 +52,7 @@ const evmOrder = before.orders.find((o) => o.venue === 'evm');
 const collateralUsd = evmOrder.capitalCents / 100;
 const grant = { principal: 'synthetic-principal', type: 'RevocableBrokerageAuthorityGrant', id: 'example:grant', revoked: false, adapter: 'gmx', chainId: 42161, account: market, validUntil: horizon, scopes: ['orders:build'], limits: { maxLeverage: 2, maxValuePerTransactionUsd: 1000, allowedContracts: [chain.exchangeRouter, chain.orderVault, chain.router, chain.usdc] } };
 const unsigned = await gmx.buildPerpOrder({ grant, now: at, marketDecision: before, order: { market, collateralToken: chain.usdc, collateralAmount: BigInt(Math.floor(collateralUsd * 1e6)), collateralUsd, sizeDeltaUsd: usdToE30(collateralUsd), isLong: true, acceptablePriceE30: usdToE30(100), executionFeeWei: 1n } });
-const specification = { source: 'urn:synthetic:kalshi-probability', path: ['probability'], calibration, bins: [
+const specification = { source: 'urn:synthetic:kalshi-probability', path: ['probability'], calibration, expectedReturns: [{trainingSamples:50,gross:.1},{trainingSamples:50,gross:.1}], bins: [
   { lower: 0, upper: .5, likelihoods: { growth: .1, 'tech-down': .7, 'crypto-down': .2 } },
   { lower: .5, upper: 1.01, likelihoods: { growth: .7, 'tech-down': .1, 'crypto-down': .2 } },
 ] };
