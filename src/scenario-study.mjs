@@ -29,11 +29,16 @@ export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFra
   const total=scenarios.reduce((a,s)=>a+totals[s],0);
   const prior=Object.fromEntries(scenarios.map(s=>[s,totals[s]/total]));
   const fittedBins=bins.map((b,i)=>({...b,likelihoods:Object.fromEntries(scenarios.map(s=>[s,counts[s][i]/totals[s]]))}));
+  const trainingReturns=bins.map((_,i)=>training.filter(row=>bucket(row.value)===i).map(row=>row.returnFraction));
+  const expectedReturns=trainingReturns.map(values=>({trainingSamples:values.length,gross:values.length?mean(values):null}));
   const predictions=evaluation.map(row=>{
     const weights=scenarios.map(s=>prior[s]*fittedBins[bucket(row.value)].likelihoods[s]);
     const p=weights[0]/(weights[0]+weights[1]), y=Number(row.scenario===scenarios[0]);
+    const expectedGrossReturn=expectedReturns[bucket(row.value)].gross;
+    const expectedNetReturn=expectedGrossReturn===null?null:expectedGrossReturn-roundTripCostFraction;
+    const selected=expectedNetReturn!==null&&expectedNetReturn>0;
     return {rowId:row.id,featureAt:row.featureAt,outcomeAt:row.outcomeAt,prediction:p,outcome:y,brier:(p-y)**2,baselineBrier:(prior[scenarios[0]]-y)**2,
-      strategyReturn:p>0.5?row.returnFraction-roundTripCostFraction:0,baselineDailyReturn:row.returnFraction-roundTripCostFraction};
+      expectedGrossReturn,expectedNetReturn,selected,strategyReturn:selected?row.returnFraction-roundTripCostFraction:0,baselineDailyReturn:row.returnFraction-roundTripCostFraction};
   });
   // Fixed calendar blocks keep dense or repeated looks from manufacturing weekly trials.
   const blockMillis=blockSize*86400000,blocks=new Map();
@@ -54,14 +59,14 @@ export function fitScenarioStudy({ rows, source, path, bins, scenarios, trainFra
   const returnVariance=m>1?returnBlocks.reduce((sum,x)=>sum+(x-mean(returnBlocks))**2,0)/(m-1):null;
   const netReturnConfidenceLowerBound=m>=3?mean(returnBlocks)-critical*Math.sqrt(returnVariance/m):null;
   const scores={kind:'calibration',liveUseLimitations:[...new Set(liveUseLimitations)].sort(),sampleSize:predictions.length,brier:mean(predictions.map(p=>p.brier)),baselineBrier:mean(predictions.map(p=>p.baselineBrier)),windowEnd:predictions.at(-1).outcomeAt,
-    confidenceLowerBound,netReturnConfidenceLowerBound,blockCount:m,blockSize,method:'fixed-binned-likelihood-temporal-holdout/v2',blockUnit:'complete fixed UTC calendar blocks; non-overlapping asset returns',trainingSamples:training.length,
+    confidenceLowerBound,netReturnConfidenceLowerBound,blockCount:m,blockSize,method:'fixed-binned-likelihood-and-return-temporal-holdout/v3',blockUnit:'complete fixed UTC calendar blocks; non-overlapping asset returns',trainingSamples:training.length,
     sourceObservationIds:[...new Set(rows.flatMap(row=>row.evidenceIds))].sort(),rowDigest:hashPosition(ordered),
-    grossSelectionRule:'daily round trip when fitted positive-return probability exceeds 0.5; otherwise cash',roundTripCostFraction,
+    grossSelectionRule:'daily round trip when the bin mean asset return estimated from training exceeds the declared round-trip cost; otherwise cash',roundTripCostFraction,
     strategyMeanNetReturn:mean(predictions.map(p=>p.strategyReturn)),baselineDailyRoundTripMeanNetReturn:mean(predictions.map(p=>p.baselineDailyReturn)),
     scope:'exploratory single signal and asset; calendar-block approximation, no causal or cross-asset claim'};
   const scored=observation({source:producer,externalId:hashPosition(scores),availableAt:observedAt,observedAt,value:scores});
   const calibration={sampleSize:scores.sampleSize,brier:scores.brier,baselineBrier:scores.baselineBrier,windowEnd:scores.windowEnd,record:scored.observation.id,confidenceLowerBound,netReturnConfidenceLowerBound,liveUseLimitations:scores.liveUseLimitations};
-  const specification={source,path,prior,bins:fittedBins,calibration};
+  const specification={source,path,prior,bins:fittedBins,expectedReturns,calibration};
   const model=observation({source:producer,externalId:hashPosition(specification),availableAt:observedAt,observedAt,value:{kind:'scenario-likelihood-model',model:specification}});
   return {id:hashPosition({scores,specification}),scores,predictions,prior,model:{evidenceId:model.observation.id,specification},observations:[scored,model],
     eligibleForLiveUse:liveUseLimitations.length===0 && confidenceLowerBound!==null && confidenceLowerBound>0 && scores.brier<scores.baselineBrier && netReturnConfidenceLowerBound!==null && netReturnConfidenceLowerBound>0};
