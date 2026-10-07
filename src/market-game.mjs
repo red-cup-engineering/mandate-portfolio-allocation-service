@@ -155,14 +155,16 @@ export function planMarket(state, policy, at) {
     || !calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
   const measured = state.observations[calibration.record]?.value;
   if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
-  if (f.conditioning || ['fixed-binned-likelihood-temporal-holdout/v1','fixed-binned-likelihood-temporal-holdout/v2'].includes(measured.method)) {
-    if (measured.liveUseLimitations!==undefined && (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length))throw new RangeError('study has unresolved live-use limitations');
+  // Every funded strategy needs measured confidence, regardless of method
+  // name or whether prediction-market conditioning metadata is present.
+  {
+    if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
     if (!Number.isFinite(calibration.confidenceLowerBound) || calibration.confidenceLowerBound<=0
         || !Number.isFinite(calibration.netReturnConfidenceLowerBound) || calibration.netReturnConfidenceLowerBound<=0)
-      throw new RangeError('conditioned financial strategy lacks positive measured calibration and net-return confidence');
+      throw new RangeError('financial strategy lacks positive measured calibration and net-return confidence');
     if (measured.confidenceLowerBound!==calibration.confidenceLowerBound
         || measured.netReturnConfidenceLowerBound!==calibration.netReturnConfidenceLowerBound)
-      throw new TypeError('conditioned strategy confidence differs from scored evidence');
+      throw new TypeError('strategy confidence differs from scored evidence');
   }
   const accounts = Object.values(state.accounts).sort((a, b) => a.venue.localeCompare(b.venue));
   if (!accounts.length || accounts.some((a) => !fresh(a))) throw new RangeError('fresh account readings required');

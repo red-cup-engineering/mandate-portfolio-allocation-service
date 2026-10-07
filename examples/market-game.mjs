@@ -5,18 +5,22 @@
  */
 import { writeFileSync, existsSync } from 'node:fs';
 import { marketGame, planMarket, allocationFor, strategyPerformance } from '../src/market-game.mjs';
-import { hashPosition, createRulePlayer } from '@red-cup-engineering/gaming/running/rules';
+import { hashPosition } from '@red-cup-engineering/gaming/running/rules';
 import { formAggressivePortfolioIntent } from '../../alpha-portfolio-order-intent-service/src/aggressive-intent.mjs';
 import { createGmxAdapter, GMX_CHAINS, usdToE30 } from '../../pluggable-venue-adapter-service/src/gmx-adapter.mjs';
 import { venueOrderForIntent } from '../../brokerage-execution-transport-service/src/execute-intent.mjs';
 
 const at = '2026-10-06T15:00:00.000Z', later = '2026-10-06T15:00:01.000Z', horizon = '2026-10-07T15:00:00.000Z';
 const market = '0x1111111111111111111111111111111111111111';
-const calibration = { sampleSize: 100, brier: .1, baselineBrier: .2, windowEnd: '2026-10-05T15:00:00.000Z', record: 'example:calibration' };
+const calibration = { sampleSize: 100, brier: .1, baselineBrier: .2, windowEnd: '2026-10-05T15:00:00.000Z', record: 'example:calibration', confidenceLowerBound: .01, netReturnConfidenceLowerBound: .01, liveUseLimitations: [] };
 const policy = { maxObservationAgeMs: 60000, minCalibrationSamples: 30, minCashCentsByVenue: { kalshi: 10000, alpaca: 10000, evm: 10000 }, maxDeployFraction: .5, maxInstrumentFraction: .15, maxScenarioLossFraction: .25, factorCaps: { technology: .45, crypto: .3 }, kellyMultiple: .5 };
 const record = [];
-const player = createRulePlayer(marketGame, { onEntry: (entry) => record.push(entry) });
-const play = (intent, stamp = at) => player.play(intent, Date.parse(stamp));
+let position = marketGame.initialPosition();
+const play = (intent, stamp = at) => {
+  const result = marketGame.extend(position, intent);
+  record.push({ seq: record.length, intent, ts: Date.parse(stamp) });
+  position = result.state; return result;
+};
 const observe = (id, source, value, stamp = at) => play({ kind: 'observe', observation: { id, source, value, availableAt: stamp, observedAt: stamp } }, stamp);
 observe('example:calibration', 'urn:synthetic:scored-forecasts', { kind: 'calibration', ...calibration });
 observe('example:technology', 'urn:synthetic:issuer-release', { demand: 'growth', kind: 'news' });
@@ -35,9 +39,9 @@ play({ kind: 'forecast', forecast: { id: 'example:forecast', observedAt: at, hor
   { id: 'tech-down', probability: .35, values: { 'example:kalshi': 0, 'example:alpaca': 80, 'example:evm': 1.2 }, heldPnlCentsByVenue: { kalshi: 0, alpaca: 0, evm: 0 } },
   { id: 'crypto-down', probability: .25, values: { 'example:kalshi': 0, 'example:alpaca': 110, 'example:evm': .4 }, heldPnlCentsByVenue: { kalshi: 0, alpaca: 0, evm: 0 } },
 ] } });
-const before = planMarket(player.position, policy, at);
+const before = planMarket(position, policy, at);
 if (new Set(before.orders.map((o) => o.venue)).size !== 3) throw new Error('example did not fund all three venue carriers');
-play({ kind: 'decide', at, policy, expectedPosition: player.stateHash() });
+play({ kind: 'decide', at, policy, expectedPosition: hashPosition(marketGame.serialize(position)) });
 const contract = { type: 'PrincipalBrokerageServiceContract', id: 'example:contract', scopes: ['orders:intent'], risk: { maximumOrderNotional: 500, maximumLossAmount: 500, concentrationLimit: 1 }, capital: { amount: 1000, currency: 'USD' } };
 const alpacaOrder = before.orders.find((o) => o.venue === 'alpaca');
 const intent = formAggressivePortfolioIntent({ contract, evidencePackets: [{ type: 'IssuerEvidencePacket', id: 'example:packet' }], symbol: 'EXAMPLE', notional: alpacaOrder.capitalCents / 100, maximumLoss: alpacaOrder.capitalCents / 100, thesis: 'Synthetic only', falsifier: 'Synthetic only', liquidityPremise: 'Synthetic only', executionPremise: 'Synthetic only', scenarios: [{ pnl: 10 }, { pnl: -10 }], marketDecision: before, asOf: at });
@@ -55,16 +59,16 @@ const specification = { source: 'urn:synthetic:kalshi-probability', path: ['prob
 observe('example:model', 'urn:synthetic:likelihood-calibration', { kind: 'scenario-likelihood-model', model: specification });
 observe('example:new-price', specification.source, { probability: .3 }, later);
 play({ kind: 'condition', observationId: 'example:new-price', model: { evidenceId: 'example:model', specification }, at: later }, later);
-const after = planMarket(player.position, policy, later);
+const after = planMarket(position, policy, later);
 if (JSON.stringify(before.orders.map((o) => [o.venue, o.capitalCents])) === JSON.stringify(after.orders.map((o) => [o.venue, o.capitalCents]))) throw new Error('conditioning did not change cross-venue allocation');
 // One observed execution receipt, rather than the shadow proposal, updates performance.
 play({ kind: 'outcome', outcome: { id: 'example:outcome', decisionId: before.id, orderId: alpacaOrder.id, receipt: 'urn:synthetic:fill-and-mark', observedAt: later, pnlCents: 25 } }, later);
 const replay = marketGame.replay(undefined, record.map((entry) => entry.intent));
-if (!replay.valid || replay.stateHash !== player.stateHash()) throw new Error('replay differs from arrival');
+if (!replay.valid || replay.stateHash !== hashPosition(marketGame.serialize(position))) throw new Error('replay differs from arrival');
 const recordIndex = process.argv.indexOf('--record');
 if (recordIndex >= 0) { const path = process.argv[recordIndex + 1]; if (existsSync(path)) throw new Error('example refuses to overwrite an existing play'); writeFileSync(path, record.map((entry) => JSON.stringify(entry)).join('\n') + '\n'); }
 const summary = (decision) => decision.orders.map(({ venue, capitalCents }) => ({ venue, capitalCents }));
 console.log(JSON.stringify({ synthetic: true, venueWrites: 0, before: summary(before), afterPredictionMarketObservation: summary(after), alpacaIntentBound: intent.marketDecision.id === before.id,
   alpacaEntryCeiling: alpacaVenueOrder.limit_price, alpacaFundedQuantity: alpacaVenueOrder.qty,
   evmUnsignedPlanBound: unsigned.marketDecision === before.id && unsigned.signed === false && unsigned.broadcast === false,
-  replayHash: replay.stateHash, replayEqualsArrival: true, outcomes: strategyPerformance(player.position), kalshiCapCents: allocationFor(before, { venue: 'kalshi', instrument: 'EXAMPLE-TECH-YES', side: 'yes', at }) }, null, 2));
+  replayHash: replay.stateHash, replayEqualsArrival: true, outcomes: strategyPerformance(position), kalshiCapCents: allocationFor(before, { venue: 'kalshi', instrument: 'EXAMPLE-TECH-YES', side: 'yes', at }) }, null, 2));
