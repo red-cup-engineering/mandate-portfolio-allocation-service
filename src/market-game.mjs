@@ -229,7 +229,12 @@ export function planMarket(state, policy, at) {
       if (q.stale || q.availableUnits < q.unitStep) { refuse('no known executable liquidity'); continue; }
       if (q.venue === 'alpaca' && !['us_equity', 'crypto'].includes(q.assetClass)) { refuse('Alpaca asset class required'); continue; }
       if (seen.has(id)) { refuse('same liquidity already claimed by another strategy'); continue; }
-      if (q.venue === 'evm' && (!Number.isSafeInteger(q.chainId) || !q.blockHash || !q.finalized || !q.protocol)) { refuse('EVM quote lacks finalized chain/protocol identity'); continue; }
+      if (q.venue === 'evm') {
+        if (!Number.isSafeInteger(q.chainId) || q.chainId<=0 || typeof q.blockHash!=='string' || !/^0x[0-9a-fA-F]{64}$/.test(q.blockHash) || typeof q.finalized!=='boolean' || typeof q.protocol!=='string' || !q.protocol.trim()) { refuse('EVM quote lacks pinned chain/protocol and explicit finality identity'); continue; }
+        if (typeof q.blockTimestamp!=='string' || !/^\d{1,16}$/.test(q.blockTimestamp)) { refuse('EVM quote lacks its observed block timestamp'); continue; }
+        const stateAge=BigInt(now)-BigInt(q.blockTimestamp)*1000n;
+        if (stateAge<0n || stateAge>BigInt(Math.floor(Math.min(maxAge,60000))) || now-time(q.observedAt)>60000) { refuse('EVM quote market state is future or stale'); continue; }
+      }
       if (q.venue === 'evm' && q.carrier === 'collateral' && (!(q.leverage > 0) || !Number.isFinite(q.leverage) || !q.collateralToken)) { refuse('collateral payoff requires leverage and token identity'); continue; }
       if (q.funding && q.venue !== 'evm') throw new TypeError('inventory exchanges require an EVM venue consumer');
       const holding = q.funding && state.accounts[q.venue].inventory?.[q.funding.instrument];
@@ -283,7 +288,7 @@ export function planMarket(state, policy, at) {
     const capitalCents = Math.ceil(units * capitalPerUnit * 100 - 1e-9);
     orders.push({ id: q.id, strategy: strategy.id, venue: q.venue, instrument: q.instrument, carrier: q.carrier, side: q.side, units, unitStep: q.unitStep, entryPrice: q.entryPrice, capitalCents,
       expectedReturn: returns.reduce((r, x, k) => r + f.scenarios[k].probability * x, 0), returns,
-      ...(q.venue === 'evm' ? { chainId: q.chainId, blockHash: q.blockHash, protocol: q.protocol, ...(q.carrier === 'collateral' ? { leverage: q.leverage, collateralToken: q.collateralToken } : {}) } : {}),
+      ...(q.venue === 'evm' ? { chainId: q.chainId, blockHash: q.blockHash, blockTimestamp: q.blockTimestamp, finalized: q.finalized, protocol: q.protocol, ...(q.carrier === 'collateral' ? { leverage: q.leverage, collateralToken: q.collateralToken } : {}) } : {}),
       ...(q.venue === 'alpaca' ? { assetClass: q.assetClass } : {}),
       ...(q.funding ? { funding: { instrument: q.funding.instrument, units: units * fundingUnitsPerUnit } } : {}),
       evidence: [...new Set([...strategy.evidenceIds, ...f.evidenceIds])].sort(), thesis: strategy.thesis, falsifier: strategy.falsifier });
