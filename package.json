@@ -12,7 +12,8 @@
     "./play": "./src/play.mjs",
     "./scenario-study": "./src/scenario-study.mjs",
     "./prediction-market-research": "./src/prediction-market-research.mjs",
-    "./crypto-historical-observations": "./src/crypto-historical-observations.mjs"
+    "./crypto-historical-observations": "./src/crypto-historical-observations.mjs",
+    "./equity-prediction-market-research": "./src/equity-prediction-market-research.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -24,6 +25,7 @@
   },
   "bin": {
     "market-game": "./apps/market-game.mjs",
-    "prediction-market-study": "./apps/prediction-market-study.mjs"
+    "prediction-market-study": "./apps/prediction-market-study.mjs",
+    "prediction-market-equity-study": "./apps/prediction-market-equity-study.mjs"
   }
 }
