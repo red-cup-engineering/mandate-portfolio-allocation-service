@@ -73,8 +73,14 @@ function extend(state, move) {
       next = { ...state, forecast: newer(state.forecast, row) ? row : state.forecast }; break;
     }
     case 'condition': {
+      // A conditioned forecast is derived from the current one, so it succeeds it outright: it is validated as any
+      // forecast is, then adopted without a newer() race against its own base (an equal-time tie there is broken by
+      // content hashes, which would keep the base about half the time).
+      const base = state.forecast;
       const forecast = conditionMarketForecast(state, move.observationId, move.model, move.at);
-      return extend(state, { kind: 'forecast', forecast });
+      if (time(forecast.observedAt) < time(base.observedAt)) throw new RangeError('a conditioned forecast cannot precede the forecast it conditions');
+      const adopted = extend({ ...state, forecast: null }, { kind: 'forecast', forecast }).state.forecast;
+      return { state: { ...state, forecast: adopted }, events: [{ kind: 'forecast', polarity: 'P' }] };
     }
     case 'decide': {
       const decision = planMarket(state, move.policy, move.at);
