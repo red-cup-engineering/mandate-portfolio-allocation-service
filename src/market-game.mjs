@@ -60,6 +60,7 @@ function extend(state, move) {
       row.quoteIds.forEach(name);
       if (!Array.isArray(row.evidenceIds) || !row.evidenceIds.length) throw new TypeError('strategy requires source evidence');
       row.evidenceIds.forEach(name); name(row.thesis); name(row.falsifier);
+      if (row.lossRateEvidence !== undefined && !row.evidenceIds.includes(name(row.lossRateEvidence))) throw new TypeError('loss-rate evidence must be among the strategy evidence');
       next = { ...state, strategies: put(state.strategies, row.id, row) }; break;
     }
     case 'forecast': {
@@ -132,6 +133,26 @@ export function conditionMarketForecast(state, observationId, model, at) {
   return { ...body, id: hashPosition(body) };
 }
 
+const logGamma = (x) => { // Lanczos, g = 7
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+  x -= 1; let a = c[0]; const t = x + 7.5; for (let i = 1; i < 9; i += 1) a += c[i] / (x + i);
+  return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+};
+const binomialCdf = (k, n, p) => {
+  if (p <= 0) return 1; if (p >= 1) return k >= n ? 1 : 0;
+  let sum = 0; for (let i = 0; i <= k; i += 1) sum += Math.exp(logGamma(n + 1) - logGamma(i + 1) - logGamma(n - i + 1) + i * Math.log(p) + (n - i) * Math.log(1 - p));
+  return Math.min(1, sum);
+};
+/** The one-sided Clopper-Pearson upper bound on a loss rate: the p at which `losses` or fewer in `trials` has probability `alpha`. */
+export function lossRateUpperBound(losses, trials, alpha = 0.05) {
+  if (!Number.isSafeInteger(trials) || trials < 1 || !Number.isSafeInteger(losses) || losses < 0 || losses > trials) throw new RangeError('losses and trials must be counts with 0 <= losses <= trials, trials >= 1');
+  if (losses === trials) return 1;
+  let lo = losses / trials, hi = 1;
+  for (let i = 0; i < 100; i += 1) { const mid = (lo + hi) / 2; if (binomialCdf(losses, trials, mid) > alpha) lo = mid; else hi = mid; }
+  return hi;
+}
+
 /** Measure outcomes from receipts; an unfilled proposal contributes no win. */
 export function strategyPerformance(state) {
   const by = {};
@@ -181,14 +202,24 @@ export function planMarket(state, policy, at) {
   const evidenceOK = (ids) => ids.every((id) => { const row = state.observations[id]; return row && time(row.observedAt) <= now && time(row.availableAt) <= now; });
   if (!fresh(f) || time(f.horizon) <= now || !evidenceOK(f.evidenceIds)) throw new RangeError('forecast unavailable, expired or uses future/missing evidence');
   const calibration = f.calibration;
-  if (!calibration || !Number.isSafeInteger(calibration.sampleSize) || calibration.sampleSize < policy.minCalibrationSamples
-    || !Number.isFinite(calibration.brier) || !Number.isFinite(calibration.baselineBrier) || calibration.brier < 0 || calibration.brier >= calibration.baselineBrier
-    || !calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
+  // Two forms of measured confidence. The scored-forecast form: one Brier calibration better than its baseline, with
+  // positive confidence bounds. The per-strategy loss-rate form (`method: 'binary-loss-rate'`): binary quotes whose
+  // strategies each name a counted loss record ({kind: 'binary-loss-rate', trials, losses}); each quote is then
+  // admitted only if it earns after its costs at the record's 95% upper loss rate (checked per candidate below).
+  const lossRateForm = calibration?.method === 'binary-loss-rate';
+  if (!calibration || !calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
+  if (!lossRateForm && (!Number.isSafeInteger(calibration.sampleSize) || calibration.sampleSize < policy.minCalibrationSamples
+    || !Number.isFinite(calibration.brier) || !Number.isFinite(calibration.baselineBrier) || calibration.brier < 0 || calibration.brier >= calibration.baselineBrier)) throw new RangeError('forecast lacks measured calibration better than its baseline');
   const measured = state.observations[calibration.record]?.value;
-  if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
+  if (lossRateForm) {
+    if (measured?.kind !== 'calibration' || measured.method !== 'binary-loss-rate' || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
+  } else if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
   // Every funded strategy needs measured confidence, regardless of method
   // name or whether prediction-market conditioning metadata is present.
-  {
+  if (lossRateForm) {
+    if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
+    if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
+  } else {
     if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
     if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
     if (!Number.isFinite(calibration.confidenceLowerBound) || calibration.confidenceLowerBound<=0
@@ -240,6 +271,15 @@ export function planMarket(state, policy, at) {
       const holding = q.funding && state.accounts[q.venue].inventory?.[q.funding.instrument];
       if (q.funding && (!holding || !(holding.availableUnits > 0))) { refuse('funding inventory absent or unavailable'); continue; }
       if (q.funding && Math.abs(q.funding.unitsPerUnit * holding.markPrice - q.entryPrice) > 1e-9 * Math.max(1, q.entryPrice)) throw new RangeError('funding inventory mark differs from entry value');
+      let lossRate = null;
+      if (lossRateForm) {
+        const record = strategy.lossRateEvidence ? state.observations[strategy.lossRateEvidence]?.value : null;
+        if (record?.kind !== 'binary-loss-rate' || q.carrier !== 'binary') { refuse('loss-rate calibration requires a binary quote and its strategy\'s counted loss record'); continue; }
+        const upper = lossRateUpperBound(record.losses, record.trials, policy.lossRateAlpha ?? 0.05);
+        const cost = q.entryPrice * (1 + q.transitionCostFraction + q.carryCostFraction);
+        if (!((1 - upper) - cost > 0)) { refuse(`at the ${record.losses}/${record.trials} loss record's upper rate ${upper.toFixed(4)} the quote does not earn its cost`); continue; }
+        lossRate = { losses: record.losses, trials: record.trials, upper };
+      }
       const capitalPerUnit = q.entryPrice * (1 + q.transitionCostFraction + q.carryCostFraction);
       const fundingUnitsPerUnit = q.funding ? q.funding.unitsPerUnit * (1 + q.transitionCostFraction + q.carryCostFraction) : null;
       const returns = f.scenarios.map((s) => {
@@ -253,7 +293,7 @@ export function planMarket(state, policy, at) {
         const spent = q.funding ? fundingUnitsPerUnit * nonnegative(s.fundingValues?.[q.funding.instrument], `scenario ${s.id} funding value ${q.funding.instrument}`) : capitalPerUnit;
         return (payout - spent) / capitalPerUnit;
       });
-      seen.add(id); candidates.push({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns });
+      seen.add(id); candidates.push({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns, lossRate });
     }
   }
   const constraints = [];
@@ -280,7 +320,7 @@ export function planMarket(state, policy, at) {
   if (!sized.converged) throw new RangeError(`joint sizing did not converge (${sized.kktResidual})`);
   const multiple = nonnegative(policy.kellyMultiple, 'Kelly multiple'); if (multiple > 1) throw new RangeError('market plan requires Kelly multiple <= 1');
   const orders = [];
-  candidates.forEach(({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns }, i) => {
+  candidates.forEach(({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns, lossRate }, i) => {
     const room = Math.floor(sized.fractions[i] * multiple * equity);
     const units = Math.floor(room / (capitalPerUnit * 100) / q.unitStep + 1e-10) * q.unitStep;
     if (units < q.unitStep) { skips.push({ strategy: strategy.id, id: q.id, reason: 'no funded edge under joint limits' }); return; }
@@ -291,6 +331,7 @@ export function planMarket(state, policy, at) {
       ...(q.venue === 'evm' ? { chainId: q.chainId, blockHash: q.blockHash, blockTimestamp: q.blockTimestamp, finalized: q.finalized, protocol: q.protocol, ...(q.carrier === 'collateral' ? { leverage: q.leverage, collateralToken: q.collateralToken } : {}) } : {}),
       ...(q.venue === 'alpaca' ? { assetClass: q.assetClass } : {}),
       ...(q.funding ? { funding: { instrument: q.funding.instrument, units: units * fundingUnitsPerUnit } } : {}),
+      ...(lossRate ? { lossRate } : {}),
       evidence: [...new Set([...strategy.evidenceIds, ...f.evidenceIds])].sort(), thesis: strategy.thesis, falsifier: strategy.falsifier });
   });
   // Monetary rounding and signed hedge returns can invalidate continuous limits.
