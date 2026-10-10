@@ -189,6 +189,53 @@ function scoredPayoffScopes(measured){
   return scopes;
 }
 
+/** The scored-forecast form: one Brier calibration better than its baseline, with positive confidence bounds.
+ * These checks are planMarket's own, moved here unchanged. */
+function brierCalibration(state, f, policy) {
+  const calibration = f.calibration;
+  if (!calibration || !Number.isSafeInteger(calibration.sampleSize) || calibration.sampleSize < policy.minCalibrationSamples
+    || !Number.isFinite(calibration.brier) || !Number.isFinite(calibration.baselineBrier) || calibration.brier < 0 || calibration.brier >= calibration.baselineBrier
+    || !calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
+  const measured = state.observations[calibration.record]?.value;
+  if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
+  // Every funded strategy needs measured confidence, regardless of method
+  // name or whether prediction-market conditioning metadata is present.
+  {
+    if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
+    if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
+    if (!Number.isFinite(calibration.confidenceLowerBound) || calibration.confidenceLowerBound<=0
+        || !Number.isFinite(calibration.netReturnConfidenceLowerBound) || calibration.netReturnConfidenceLowerBound<=0)
+      throw new RangeError('financial strategy lacks positive measured calibration and net-return confidence');
+    if (measured.confidenceLowerBound!==calibration.confidenceLowerBound
+        || measured.netReturnConfidenceLowerBound!==calibration.netReturnConfidenceLowerBound)
+      throw new TypeError('strategy confidence differs from scored evidence');
+  }
+  return measured;
+}
+
+/** The counted loss-rate form (`calibration.method: 'binary-loss-rate'`): the calibration record carries the cost
+ * budget, live-use limitations and payoff scopes; each binary quote's strategy names a counted loss record, and the
+ * quote is admitted only if it earns after its costs at that record's 95% upper loss rate (planMarket, per candidate). */
+function lossRateCalibration(state, f) {
+  const calibration = f.calibration;
+  if (!calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
+  const measured = state.observations[calibration.record]?.value;
+  if (measured?.kind !== 'calibration' || measured.method !== 'binary-loss-rate' || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
+  if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
+  if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
+  return measured;
+}
+
+/** A counted loss record: integer counts, and who counted them from which witnessed records (ids or a digest). */
+function countedLossRecord(record) {
+  if (record?.kind !== 'binary-loss-rate' || !Number.isSafeInteger(record.trials) || record.trials < 1 || !Number.isSafeInteger(record.losses) || record.losses < 0 || record.losses > record.trials) return null;
+  const counted = record.counted;
+  if (!counted || typeof counted.by !== 'string' || !counted.by.trim()) return null;
+  const cites = (Array.isArray(counted.records) && counted.records.length > 0 && counted.records.every((id) => typeof id === 'string' && id.trim()))
+    || (typeof counted.digest === 'string' && /^[0-9a-f]{64}$/u.test(counted.digest));
+  return cites ? record : null;
+}
+
 /** Joint scenarios carry common-factor dependence across all three venues.
  * Limits act on funded capital; they do not imply fungible venue cash or atomic
  * cross-venue execution. Existing holdings enter every scenario explicitly.
@@ -201,34 +248,10 @@ export function planMarket(state, policy, at) {
   const fresh = (row) => row && time(row.observedAt) <= now && now - time(row.observedAt) <= maxAge;
   const evidenceOK = (ids) => ids.every((id) => { const row = state.observations[id]; return row && time(row.observedAt) <= now && time(row.availableAt) <= now; });
   if (!fresh(f) || time(f.horizon) <= now || !evidenceOK(f.evidenceIds)) throw new RangeError('forecast unavailable, expired or uses future/missing evidence');
-  const calibration = f.calibration;
-  // Two forms of measured confidence. The scored-forecast form: one Brier calibration better than its baseline, with
-  // positive confidence bounds. The per-strategy loss-rate form (`method: 'binary-loss-rate'`): binary quotes whose
-  // strategies each name a counted loss record ({kind: 'binary-loss-rate', trials, losses}); each quote is then
-  // admitted only if it earns after its costs at the record's 95% upper loss rate (checked per candidate below).
-  const lossRateForm = calibration?.method === 'binary-loss-rate';
-  if (!calibration || !calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
-  if (!lossRateForm && (!Number.isSafeInteger(calibration.sampleSize) || calibration.sampleSize < policy.minCalibrationSamples
-    || !Number.isFinite(calibration.brier) || !Number.isFinite(calibration.baselineBrier) || calibration.brier < 0 || calibration.brier >= calibration.baselineBrier)) throw new RangeError('forecast lacks measured calibration better than its baseline');
-  const measured = state.observations[calibration.record]?.value;
-  if (lossRateForm) {
-    if (measured?.kind !== 'calibration' || measured.method !== 'binary-loss-rate' || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
-  } else if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
-  // Every funded strategy needs measured confidence, regardless of method
-  // name or whether prediction-market conditioning metadata is present.
-  if (lossRateForm) {
-    if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
-    if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
-  } else {
-    if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
-    if (!Array.isArray(measured.liveUseLimitations)||measured.liveUseLimitations.length)throw new RangeError('study has unresolved live-use limitations');
-    if (!Number.isFinite(calibration.confidenceLowerBound) || calibration.confidenceLowerBound<=0
-        || !Number.isFinite(calibration.netReturnConfidenceLowerBound) || calibration.netReturnConfidenceLowerBound<=0)
-      throw new RangeError('financial strategy lacks positive measured calibration and net-return confidence');
-    if (measured.confidenceLowerBound!==calibration.confidenceLowerBound
-        || measured.netReturnConfidenceLowerBound!==calibration.netReturnConfidenceLowerBound)
-      throw new TypeError('strategy confidence differs from scored evidence');
-  }
+  // Two forms of measured confidence: the scored-forecast (Brier) form, whose checks are unchanged in
+  // brierCalibration, and the counted loss-rate form for binary strategies (lossRateCalibration).
+  const lossRateForm = f.calibration?.method === 'binary-loss-rate';
+  const measured = lossRateForm ? lossRateCalibration(state, f) : brierCalibration(state, f, policy);
   if (f.conditioning) {
     if (!f.evidenceIds.includes(f.conditioning.model) || !evidenceOK([f.conditioning.model])) throw new TypeError('conditioned selection model requires presently available forecast evidence');
     const model = state.observations[f.conditioning.model]?.value;
@@ -273,12 +296,12 @@ export function planMarket(state, policy, at) {
       if (q.funding && Math.abs(q.funding.unitsPerUnit * holding.markPrice - q.entryPrice) > 1e-9 * Math.max(1, q.entryPrice)) throw new RangeError('funding inventory mark differs from entry value');
       let lossRate = null;
       if (lossRateForm) {
-        const record = strategy.lossRateEvidence ? state.observations[strategy.lossRateEvidence]?.value : null;
-        if (record?.kind !== 'binary-loss-rate' || q.carrier !== 'binary') { refuse('loss-rate calibration requires a binary quote and its strategy\'s counted loss record'); continue; }
+        const record = strategy.lossRateEvidence ? countedLossRecord(state.observations[strategy.lossRateEvidence]?.value) : null;
+        if (!record || q.carrier !== 'binary') { refuse('loss-rate calibration requires a binary quote and its strategy\'s counted loss record (counts and the witnessed records they were counted from)'); continue; }
         const upper = lossRateUpperBound(record.losses, record.trials, policy.lossRateAlpha ?? 0.05);
         const cost = q.entryPrice * (1 + q.transitionCostFraction + q.carryCostFraction);
         if (!((1 - upper) - cost > 0)) { refuse(`at the ${record.losses}/${record.trials} loss record's upper rate ${upper.toFixed(4)} the quote does not earn its cost`); continue; }
-        lossRate = { losses: record.losses, trials: record.trials, upper };
+        lossRate = { losses: record.losses, trials: record.trials, upper, counted: record.counted };
       }
       const capitalPerUnit = q.entryPrice * (1 + q.transitionCostFraction + q.carryCostFraction);
       const fundingUnitsPerUnit = q.funding ? q.funding.unitsPerUnit * (1 + q.transitionCostFraction + q.carryCostFraction) : null;

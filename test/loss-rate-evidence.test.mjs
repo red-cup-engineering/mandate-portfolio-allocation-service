@@ -13,7 +13,7 @@ function game({ records, calibration = { method: 'binary-loss-rate', record: 'ca
   const play = (intent) => { s = marketGame.extend(s, intent).state; };
   const observe = (id, value) => play({ kind: 'observe', observation: { id, source: 'urn:test', value, availableAt: at, observedAt: at } });
   observe('cal', { kind: 'calibration', method: 'binary-loss-rate', windowEnd, roundTripCostFraction: 0.01, liveUseLimitations: [], payoffScopes: quotes.map(scope) });
-  for (const [id, r] of Object.entries(records)) observe(id, { kind: 'binary-loss-rate', ...r });
+  for (const [id, r] of Object.entries(records)) observe(id, { kind: 'binary-loss-rate', counted: { by: 'test:counter', records: [`${id}:settlement-1`] }, ...r });
   play({ kind: 'account', account: { venue: 'kalshi', principal: 'p', observedAt: at, equityCents: 2500, freeCashCents: 2500 } });
   for (const q of quotes) play({ kind: 'quote', quote: q });
   // A: 0 losses in 240; B: 1 loss in 61; C: no counted record
@@ -49,7 +49,45 @@ test('loss-rate calibration funds only quotes that earn their cost at their reco
   assert.equal(d.orders.length, 1);
 });
 
-test('the Brier form is unchanged: a forecast with neither form refuses as before', () => {
+// The scored-forecast (Brier) form, pinned to the decision origin/main's planMarket makes on this game (computed there
+// before the loss-rate form was added): the same decision id, units and capital, and the same refusal.
+function brierGame() {
+  const at = '2026-10-10T15:00:00.000Z', horizon = '2026-10-11T15:00:00.000Z';
+  const calibration = { sampleSize: 100, brier: .1, baselineBrier: .2, windowEnd: '2026-10-09T15:00:00.000Z', record: 'cal', confidenceLowerBound: .01, netReturnConfidenceLowerBound: .01, liveUseLimitations: [] };
+  const q = { id: 'kq', venue: 'kalshi', instrument: 'KX-TEST', carrier: 'binary', side: 'yes', entryPrice: .25, availableUnits: 10000, unitStep: 1, observedAt: at, horizon, transitionCostFraction: .001, carryCostFraction: .001 };
+  let s = marketGame.initialPosition(); const play = (intent) => { s = marketGame.extend(s, intent).state; };
+  const observe = (id, value) => play({ kind: 'observe', observation: { id, source: 'urn:test', value, availableAt: at, observedAt: at } });
+  observe('news', { kind: 'news' });
+  observe('cal', { kind: 'calibration', ...calibration, roundTripCostFraction: .05, payoffScopes: [{ target: { venue: 'kalshi', instrument: 'KX-TEST', carrier: 'binary', side: 'yes', fundingInstrument: null }, minHoldingPeriodMs: 86400000 - 60000, maxHoldingPeriodMs: 86400000 }] });
+  play({ kind: 'account', account: { venue: 'kalshi', principal: 'p', observedAt: at, equityCents: 100000, freeCashCents: 100000 } });
+  play({ kind: 'quote', quote: q });
+  play({ kind: 'strategy', strategy: { id: 's', observedAt: at, quoteIds: ['kq'], evidenceIds: ['news'], thesis: 't', falsifier: 'f' } });
+  play({ kind: 'forecast', forecast: { id: 'f', observedAt: at, horizon, evidenceIds: ['cal', 'news'], calibration, scenarios: [
+    { id: 'yes', probability: .4, values: { kq: 1 }, heldPnlCentsByVenue: { kalshi: 0 } }, { id: 'no', probability: .6, values: { kq: 0 }, heldPnlCentsByVenue: { kalshi: 0 } }] } });
+  return { s, at, policy: { principal: 'p', maxObservationAgeMs: 60000, minCalibrationSamples: 30, maxDeployFraction: .5, maxInstrumentFraction: .15, maxScenarioLossFraction: .25, kellyMultiple: .5 } };
+}
+
+test('the Brier form decides exactly as origin/main did', () => {
+  const g = brierGame();
+  const d = planMarket(g.s, g.policy, g.at);
+  assert.equal(d.id, '6513bfbdcb2b30fee69390d2809894290b92fa2d0a86360e5648518c2a1ffefb');
+  assert.deepEqual(d.orders.map((o) => [o.units, o.capitalCents, 'lossRate' in o]), [[299, 7490, false]]);
+  assert.throws(() => planMarket(g.s, { ...g.policy, minCalibrationSamples: 200 }, g.at), /^RangeError: forecast lacks measured calibration better than its baseline$/u);
+});
+
+test('a loss record without its counting provenance is refused, never trusted', () => {
+  for (const counted of [undefined, { by: 'x' }, { by: '', records: ['r'] }, { by: 'x', records: [] }, { by: 'x', digest: 'not-a-digest' }]) {
+    const s = game({ records: { 'rec-A': { trials: 240, losses: 0 }, 'rec-B': { trials: 61, losses: 1 } } });
+    const bare = { ...s, observations: { ...s.observations, 'rec-A': { ...s.observations['rec-A'], value: { kind: 'binary-loss-rate', trials: 240, losses: 0, ...(counted ? { counted } : {}) } } } };
+    const d = planMarket(bare, policy, at);
+    assert.ok(d.skips.some((k) => k.id === 'KX-A' && /counted loss record/u.test(k.reason)), JSON.stringify(counted));
+  }
+  const s = game({ records: { 'rec-A': { trials: 240, losses: 0 }, 'rec-B': { trials: 61, losses: 1 } } });
+  const digest = { ...s, observations: { ...s.observations, 'rec-A': { ...s.observations['rec-A'], value: { kind: 'binary-loss-rate', trials: 240, losses: 0, counted: { by: 'x', digest: 'a'.repeat(64) } } } } };
+  assert.ok(planMarket(digest, policy, at).orders.some((o) => o.id === 'KX-A'));
+});
+
+test('a forecast with neither form refuses as before', () => {
   const s = game({ records: { 'rec-A': { trials: 240, losses: 0 }, 'rec-B': { trials: 61, losses: 1 } }, calibration: { record: 'cal', windowEnd } });
   assert.throws(() => planMarket(s, policy, at), /lacks measured calibration better than its baseline|differs from its scored evidence/u);
 });
