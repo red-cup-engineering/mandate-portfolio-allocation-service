@@ -8,6 +8,7 @@
     "./allocate-opportunities": "./src/allocate-opportunities.mjs",
     "./market-game": "./src/market-game.mjs",
     "./settlement-modal": "./src/settlement-modal.mjs",
+    "./binary-maker-game": "./src/binary-maker-game.mjs",
     "./public-observations": "./src/public-observations.mjs",
     "./research-publication": "./src/research-publication.mjs",
     "./play": "./src/play.mjs",
