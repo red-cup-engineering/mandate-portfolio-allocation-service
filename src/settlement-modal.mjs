@@ -80,3 +80,89 @@ export function deduceSettlementInterval({payout,premises=[],at}={}) {
     orderEffect:false,
   };
 }
+
+
+/**
+ * An explicitly CONDITIONAL reachability envelope for a running maximum or
+ * minimum under piecewise certified bounds on the *instantaneous rate*.
+ *
+ * With T' in [rateLower, rateUpper] for EVERY instant in the segment, not just
+ * at sampled endpoints, integrate to bound both the terminal temperature and
+ * every intermediate excursion. This conditional numerical theorem is not
+ * a claim that actual weather obeys a proposed rate envelope.
+ *
+ * Segments cover the entire remaining observation window without gaps:
+ * the first begins at 'at', each ends at 'until', and the final segment
+ * must end exactly at 'endAt'. A stale, missing or later-published segment
+ * withholds the final bound. Temperatures are real physical quantities;
+ * any settlement-source reporting/rounding transform belongs downstream.
+ */
+export function boundRatePathExtremum({
+  kind,at,endAt,temperature,achievedExtreme,segments=[]
+}={}) {
+  if(!['high','low'].includes(kind)||!timestamp(at)||!timestamp(endAt)||
+    !validInterval(temperature)||!validInterval(achievedExtreme)||
+    ![temperature.lower,temperature.upper,achievedExtreme.lower,achievedExtreme.upper].every(Number.isFinite)||
+    !Array.isArray(segments))
+    throw new TypeError('extreme kind, real bounded temperature, prior extreme and observation window required');
+  const started=Date.parse(at),finished=Date.parse(endAt);
+  if(finished<started)throw new RangeError('observation window ended before issuance');
+  if(kind==='high'&&temperature.lower>achievedExtreme.upper||
+     kind==='low'&&temperature.upper<achievedExtreme.lower)
+    return {status:'inconsistent-initial-extreme',finalExtreme:null,orderEffect:false};
+  if(started===finished&&segments.length)
+    throw new RangeError('no future segments allowed when the observation period has ended');
+  let cursor=started, current={lower:temperature.lower,upper:temperature.upper};
+  let extreme={lower:achievedExtreme.lower,upper:achievedExtreme.upper};
+  const receipts=[],seen=new Set();
+  for(const s of segments){
+    if(!s||!nonempty(s.id)||seen.has(s.id)||!timestamp(s.until)||
+      !timestamp(s.availableAt)||!timestamp(s.observedAt)||
+      Date.parse(s.observedAt)>Date.parse(s.availableAt)||
+      !Number.isFinite(s.rateLowerPerHour)||!Number.isFinite(s.rateUpperPerHour)||
+      s.rateLowerPerHour>s.rateUpperPerHour)
+      throw new TypeError('unique rate certificate, valid interval and publication clocks required');
+    seen.add(s.id);
+    const until=Date.parse(s.until);
+    if(until<=cursor||until>finished)throw new RangeError('rate segments must be strictly increasing and inside the observation window');
+    if(Date.parse(s.availableAt)>started) {
+      return {status:'rate-bound-not-yet-available',withheld:[s.id],finalExtreme:null,orderEffect:false};
+    }
+    const hours=(until-cursor)/3600000;
+    const endpoint={
+      lower:current.lower+s.rateLowerPerHour*hours,
+      upper:current.upper+s.rateUpperPerHour*hours,
+    };
+    // For the MAX, every continuous path must reach its starting and ending
+    // temperatures; a rate ceiling controls ANY intermediate upward spike.
+    // MIN is the exact order-dual argument.
+    if(kind==='high'){
+      extreme={
+        lower:Math.max(extreme.lower,current.lower,endpoint.lower),
+        upper:Math.max(extreme.upper,current.upper,endpoint.upper),
+      };
+    } else {
+      extreme={
+        lower:Math.min(extreme.lower,current.lower,endpoint.lower),
+        upper:Math.min(extreme.upper,current.upper,endpoint.upper),
+      };
+    }
+    if(![endpoint.lower,endpoint.upper,extreme.lower,extreme.upper].every(Number.isFinite))
+      throw new RangeError('temperature reachability overflow');
+    receipts.push({id:s.id,until:s.until,availableAt:s.availableAt});
+    current=endpoint;cursor=until;
+  }
+  if(cursor!==finished) {
+    return {status:'incomplete-rate-horizon',coveredUntil:new Date(cursor).toISOString(),
+      finalExtreme:null,orderEffect:false};
+  }
+  return {status:'conditional-rate-bounded-reachability',
+    finalExtreme:extreme,terminalTemperature:current,
+    certificates:receipts,extremumKind:kind,
+    assumptions:[
+      'initial physical temperature and achieved extreme lie in the supplied intervals',
+      'each rate bound applies at every instant in its entire segment',
+      'ordered segments cover the full remaining observation window',
+      'no implied calibration, source agreement, rounding, correction or venue payout'],
+    tradeEligible:false,orderEffect:false};
+}
