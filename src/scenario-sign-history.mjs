@@ -113,13 +113,12 @@ export function scenarioSourceReceiptCells(projection,sourceReceipts){
 
 function originalCellAt(h,proposal,{functional=false}={}){
   const existing=historySection(h,proposal.subject,proposal.predicate);
-  if(existing.some(value=>same(value,proposal)))return true;
   // Source identities and completed posterior IDs are immutable, whereas
   // one source may be a nonfunctional predecessor of MANY joint forecasts.
-  // Do not misclassify a second legitimate inference as a conflicting issuer.
-  if(functional&&existing.length)
+  // A matching member cannot mask a contradictory one in a source identity.
+  if(functional&&existing.some(value=>!same(value,proposal)))
     throw new RangeError('existing SignCraft source/proof identity conflicts with new evidence');
-  return false;
+  return existing.some(value=>same(value,proposal));
 }
 
 /**
