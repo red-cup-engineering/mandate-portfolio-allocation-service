@@ -202,3 +202,90 @@ Research code may still use synthetic fixtures, separately authorized
 source receipts and already-retained experimental summaries. No live AAA
 data acquisition, expanded scraper, purchased license or commercial
 redistribution was authorized or carried out in this work.
+
+
+## October 12 implementation: joint evidence, actions and information value
+
+New reusable mathematics lives under mandate-portfolio-allocation-service,
+upstream of Kalshi, gas, weather and other venue/source adapters:
+
+1. binary-maker-game adds binaryMakerOutcomeConditionedBounds:
+   P(W and F)=P(W)P(F|W); P(not W and F)=(1-P(W))P(F|not W).
+   Sharp conditional expected maker P&L over uncertainty intervals is
+   evaluated at every corner of the trilinear parameter box. Fees apply
+   only when a contract fills. The old unrestricted Frechet model remains
+   available when outcome-dependent fill evidence is missing.
+2. binary-fill-calibration adds fitBinaryOutcomeFillByDay. It requires
+   individually identified real terminal venue orders with receipt
+   clocks and finalized, source-matched venue settlement labels,
+   with model fitting frozen before later decisions. Multiple orders
+   on one source-local day count as ONE day mean per outcome class.
+   An insufficient number of losing or winning settlement days
+   withholds the hazard candidate. Even a populated Hoeffding
+   interval remains exploratory because day-block independence and
+   stationarity are unverified; an externally supplied model ID
+   cannot itself certify admission.
+3. binary-participation-menu compares current book takers, marginal
+   or outcome-conditioned makers, uncredited incentive scenarios,
+   and conditional multi-leg hedges against ZERO-return abstention.
+   Returns are in expected dollars PER ATTEMPT, not per selected
+   fill. A full-leg Dutch-book payoff is not enough to rank a hedge
+   without a joint all-leg fill model and bounded partial-leg loss.
+4. market-information-value consumes the existing joint market-game
+   scenario forecast and a before-decision normalized conditional
+   signal kernel, using the SAME action menu before/after the
+   hypothetical signal. Its EVSI is expected improved decision
+   return minus the value of the original best action, BEFORE
+   subtracting explicit data/compute and opponent repricing cost.
+   This is conditional research, not guaranteed realizable alpha.
+
+Kalshi forecasting's new downstream aaa-gas-participation module
+reuses its existing exact AAA rule/population binding, joint
+scenario projection, coherence LP, live quote receipts and
+fee model. It supplies only sourced one-lot taker/maker proposals
+to the upstream participation comparator. Optional information
+value uses the SAME joint gas scenarios, building each frozen
+taker-vs-abstain payoff vector through the observed book and
+Kalshi's actual fee function. The signal likelihood model must
+match the event and be received before the decision; signal
+acquisition and opponent repricing costs are explicit.
+Current venue fee accounting in this path is limited to
+whole-cent quotes; a non-whole-cent input is withheld rather
+than silently assigned a zero fee.
+
+An important provenance correction: the existing gas-labelled
+fill-grid-gas.csv mixes AAA gasoline and diesel markets. It
+does NOT retain series/event IDs, independent settlement-day
+identities, or actual terminal order receipts. The source is
+read by fuel-maker-fill-retrospective.mjs, not the new admitted
+fill-by-day calibration code. It can produce only descriptive,
+optimistic fee-excluded economics for a pooled fuel class.
+The corresponding immutable provenance and calculated result
+are preserved under the existing October 12 AAA gas game
+record in pooled-fuel-fill-selection.json.
+
+In that retained zero-queue, four-hour hypothetical grid,
+simulated 98-cent YES orders filled about 25.9 percent of the
+time conditional on eventually winning, compared with 51.0
+percent conditional on losing. Gross cash was approximately
+-1.035 cents PER ATTEMPT, including approximately -0.747
+cents relative to an independence counterfactual. Other
+94-97 cent bins were also negative gross. No independent
+held-out profitability, exclusive-AAA gas signal, measured
+maker reward, complete fee regime or live execution follows.
+Relative returns on separate strategy datasets must not
+be ranked as though they were paired observations.
+
+The existing forecasting package now offers an offline
+aaa-gas-study CLI that consumes a local archived CSV or
+point-in-time JSON participation packet. It does not fetch
+the AAA site, alter the desk, or schedule a trader.
+
+The next admission work remains immutable individual market
+rule, source receipt, quote, queue, venue order terminal,
+settlement result and fee evidence. Fit the outcome-conditional
+execution model on past independent settlement days, evaluate
+on future day clusters, and compare actual cash per attempted
+decision across maker, taker, LIP and structural policies.
+Data rights, source attribution and independent receiving
+are prerequisites; retrospective replay is not authority.
