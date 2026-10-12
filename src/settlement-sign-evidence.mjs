@@ -21,7 +21,7 @@ const CHANNELS=Object.freeze([
   'other-conditional-research',
 ]);
 const witnessId=w=>w.premises.join('|')+':'+w.rule+':'+w.scope;
-const ordered=xs=>xs.slice().sort((a,b)=>witnessId(a).localeCompare(witnessId(b));
+const ordered=xs=>xs.slice().sort((a,b)=>witnessId(a).localeCompare(witnessId(b)));
 
 /**
  * Context binds source, rule identity, event date and exact assumptions.
