@@ -101,7 +101,7 @@ test('failed or unconfirmed market orders cannot be quietly counted as definite 
  assert.throws(()=>fit({rows:[record(0,{settlementStatus:'provisional'})]}),TypeError);
  assert.throws(()=>fit({rows:[record(0,{executionReceiptId:''})]}),TypeError);
  assert.throws(()=>fit({rows:[record(0,{filled:false,filledContracts:0,fillReceivedAt:'2026-05-01T12:05:00Z'})]}),RangeError);
- assert.throws(()=>fit({rows:[record(0,{filled:true,fillReceivedAt:undefined})]}),RangeError);
+ assert.throws(()=>fit({rows:[record(0,{filled:true,filledContracts:1,fillReceivedAt:undefined})]}),RangeError);
 });
 
 test('permutation of receipt rows cannot alter the fitted study identity',()=>{
