@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {deduceSettlementInterval} from '../src/settlement-modal.mjs';
+import {deduceSettlementInterval,boundRatePathExtremum} from '../src/settlement-modal.mjs';
 const at='2026-10-11T20:00:00Z';
 const certificate=(id,lower,upper,availableAt='2026-10-11T19:00:00Z')=>({
   id,lower,upper,observedAt:'2026-10-11T18:00:00Z',availableAt,
@@ -90,4 +90,97 @@ test('finite small-world exhaustive soundness and consistent knowledge monotonic
   }
  }
  assert.ok(count>=100);
+});
+
+
+// All path certificates are conditional assumptions about *every instant*;
+// endpoint samples or an empirical rate percentile are insufficient.
+const RATE_AT='2026-10-11T18:00:00Z',RATE_END='2026-10-11T20:00:00Z';
+const rate=(id,lower,upper,until=RATE_END,availableAt='2026-10-11T17:50:00Z')=>({
+  id,rateLowerPerHour:lower,rateUpperPerHour:upper,until,
+  observedAt:'2026-10-11T17:00:00Z',availableAt,
+});
+const path=(kind,temperature,achievedExtreme,segments,other={})=>
+  boundRatePathExtremum({kind,at:RATE_AT,endAt:RATE_END,temperature,achievedExtreme,segments,...other});
+
+test('rate bounds constrain every instant, so persistent cooling leaves the prior high intact',()=>{
+ const r=path('high',{lower:80,upper:80},{lower:88,upper:88},[rate('certified-cooling',-5,-1)]);
+ assert.equal(r.status,'conditional-rate-bounded-reachability');
+ assert.deepEqual(r.finalExtreme,{lower:88,upper:88});
+ assert.deepEqual(r.terminalTemperature,{lower:70,upper:78});
+ assert.equal(r.tradeEligible,false);
+ const verdict=deduceSettlementInterval({payout:{lower:91,upper:Infinity},
+   premises:[{id:'derived-rate',...r.finalExtreme,observedAt:RATE_AT,availableAt:RATE_AT}],at:RATE_AT});
+ assert.equal(verdict.support.against.length,1);
+});
+
+test('a sound continuing warming floor makes crossing necessary, subject to the rate premise',()=>{
+ const r=path('high',{lower:80,upper:80},{lower:88,upper:88},[rate('persistent-warming',6,8)]);
+ assert.deepEqual(r.finalExtreme,{lower:92,upper:96});
+ assert.equal(r.assumptions.some(s=>s.includes('every instant')),true);
+});
+
+test('endpoint cooling observations alone cannot exclude an unobserved transient spike',()=>{
+ const r=path('high',{lower:80,upper:80},{lower:88,upper:88},[rate('loose-rate',-20,20)]);
+ assert.equal(r.finalExtreme.lower,88);
+ assert.equal(r.finalExtreme.upper,120);
+ assert.equal(r.status,'conditional-rate-bounded-reachability');
+});
+
+test('ordered separately attested segments compose without manufacturing an unobserved gap',()=>{
+ const r=path('high',{lower:80,upper:80},{lower:82,upper:82},[
+   rate('hour-one',2,4,'2026-10-11T19:00:00Z'),
+   rate('hour-two',-3,-2,RATE_END),
+ ]);
+ assert.deepEqual(r.terminalTemperature,{lower:79,upper:82});
+ assert.deepEqual(r.finalExtreme,{lower:82,upper:84});
+ assert.deepEqual(r.certificates.map(x=>x.id),['hour-one','hour-two']);
+});
+
+test('no future segment or partial future horizon is a gap, not a determination',()=>{
+ assert.equal(path('high',{lower:80,upper:80},{lower:80,upper:80},[]).status,'incomplete-rate-horizon');
+ const r=path('high',{lower:80,upper:80},{lower:80,upper:80},
+   [rate('only-first-hour',-1,1,'2026-10-11T19:00:00Z')]);
+ assert.equal(r.status,'incomplete-rate-horizon');
+ assert.equal(r.finalExtreme,null);
+});
+
+test('a rate observation published after issuance cannot be retroactively used',()=>{
+ const r=path('high',{lower:80,upper:80},{lower:88,upper:88},
+   [rate('delayed',-5,-1,RATE_END,'2026-10-11T18:20:00Z')]);
+ assert.equal(r.status,'rate-bound-not-yet-available');
+ assert.equal(r.finalExtreme,null);
+});
+
+test('inconsistent starting maximum is not permission to infer arbitrary propositions',()=>{
+ const r=path('high',{lower:95,upper:95},{lower:88,upper:88},[rate('cooling',-5,-1)]);
+ assert.equal(r.status,'inconsistent-initial-extreme');
+ assert.equal(r.finalExtreme,null);
+});
+
+test('rate lower may be negative and upper positive; min and max remain logical duals',()=>{
+ for(let start=-2;start<=2;start++)for(let low=-2;low<=1;low++)for(let high=low;high<=2;high++){
+  const temp={lower:start,upper:start},achHigh={lower:start+1,upper:start+1};
+  const x=path('high',temp,achHigh,[rate('path',low,high)]);
+  const y=path('low',{lower:-start,upper:-start},{lower:-start-1,upper:-start-1},
+    [rate('path',-high,-low)]);
+  assert.deepEqual(y.finalExtreme,{lower:-x.finalExtreme.upper,upper:-x.finalExtreme.lower});
+ }
+});
+
+test('malformed, nonmonotone, duplicate or outside-window rates fail closed',()=>{
+ const base={lower:80,upper:80};
+ assert.throws(()=>path('high',base,base,[rate('bad',4,-4)]),TypeError);
+ assert.throws(()=>path('high',base,base,[rate('outside',0,1,'2026-10-11T21:00:00Z')]),RangeError);
+ assert.throws(()=>path('high',base,base,[rate('first',1,2,'2026-10-11T19:00:00Z'),rate('first',1,2)]),TypeError);
+ assert.throws(()=>path('high',base,base,[rate('bad-time',1,2,'garbage')]),TypeError);
+});
+
+test('an ended observation window does not allow any future rate segment',()=>{
+ const r=boundRatePathExtremum({kind:'high',at:RATE_END,endAt:RATE_END,
+   temperature:{lower:80,upper:80},achievedExtreme:{lower:88,upper:88},segments:[]});
+ assert.deepEqual(r.finalExtreme,{lower:88,upper:88});
+ assert.throws(()=>boundRatePathExtremum({kind:'high',at:RATE_END,endAt:RATE_END,
+   temperature:{lower:80,upper:80},achievedExtreme:{lower:88,upper:88},
+   segments:[rate('old',-1,1)]}),RangeError);
 });
