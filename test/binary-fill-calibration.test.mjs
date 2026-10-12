@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fitBinaryOutcomeFillByDay} from '../src/binary-fill-calibration.mjs';
+import {fitBinaryOutcomeFillByDay,scoreBinaryOutcomeFillHoldout} from '../src/binary-fill-calibration.mjs';
 
 const familyScope='AAA-national-regular-directional-greater',
  regime='rest-yes-95c|queue-0|horizon-240m',side='yes';
@@ -152,4 +152,102 @@ test('partially filled and multi-lot orders cannot distort the binary one-lot fi
  assert.throws(()=>fit({rows:[record(0,{attemptedContracts:1,filledContracts:.25})]}),TypeError);
  assert.throws(()=>fit({rows:[record(0,{attemptedContracts:1,filledContracts:0,filled:true})]}),TypeError);
  assert.throws(()=>fit({rows:[record(0,{attemptedContracts:1,filledContracts:1,filled:false})]}),TypeError);
+});
+
+
+const trainingFrozen=()=>fit({
+ rows:rows(60),freezeAt:'2026-07-01T00:00:00Z',
+ publishedAt:'2026-07-01T01:00:00Z',
+});
+const futureRows=()=>Array.from({length:60},(_,i)=>record(i+61));
+const evaluate=(options={})=>scoreBinaryOutcomeFillHoldout({
+ training:trainingFrozen(),rows:futureRows(),
+ evaluatedAt:'2026-10-01T00:00:00Z',...options,
+});
+
+test('frozen real-order model can be scored on later distinct source-local days',()=>{
+ const r=evaluate();
+ assert.equal(r.status,'held-out-research-screen');
+ assert.equal(r.independentHeldoutDays,60);
+ assert.equal(r.actualHeldoutOrderCount,60);
+ near(r.trainingUnconditionalFillProbability,.5);
+ near(r.trainingFillGivenWin,.8);
+ near(r.trainingFillGivenLoss,.2);
+ near(r.holdoutBrier.unconditional,.25);
+ near(r.holdoutBrier.outcomeConditioned,.16);
+ near(r.holdoutBrier.pairedImprovement,.09);
+ assert.equal(r.conditionallyImproved,false,'small day sample cannot pass conservative Hoeffding');
+ assert.equal(r.admitted,false);
+ assert.equal(r.tradeEligible,false);
+});
+
+test('repeated same-day real fills do not inflate the count of independent evaluation days',()=>{
+ const base=evaluate(),more=futureRows();
+ for(let i=0;i<80;i++){
+  const original=more[0];
+  more.push({...original,venueOrderId:'heldout-repeat-'+i,
+   executionReceiptId:'terminal-repeat-'+i});
+ }
+ const r=evaluate({rows:more});
+ assert.equal(r.independentHeldoutDays,base.independentHeldoutDays);
+ assert.equal(r.actualHeldoutOrderCount,140);
+ near(r.holdoutBrier.exploratoryRadius,
+  base.holdoutBrier.exploratoryRadius);
+});
+
+test('valid evaluation must occur after model was frozen and source labels were finally received',()=>{
+ assert.throws(()=>evaluate({evaluatedAt:'2026-07-01T01:00:00Z'}),TypeError);
+ assert.throws(()=>evaluate({rows:[record(0)]}),RangeError);
+ assert.throws(()=>evaluate({rows:[record(60)]}),RangeError);
+ assert.throws(()=>evaluate({rows:futureRows().map(r=>({...r,
+  settlementAvailableAt:'2026-10-02T00:00:00Z'}))}),RangeError);
+});
+
+test('training receipts may not be counted again in the heldout sample',()=>{
+ const f=futureRows();
+ f[0]={...f[0],executionReceiptId:'terminal-0'};
+ assert.throws(()=>evaluate({rows:f}),RangeError);
+ const g=futureRows();
+ g[0]={...g[0],settlementReceiptId:'settled-2026-05-01'};
+ assert.throws(()=>evaluate({rows:g}),RangeError);
+});
+
+test('holdout must preserve source family, quote regime and one-lot terminal receipt',()=>{
+ assert.throws(()=>evaluate({rows:[record(65,{familyScope:'diesel'})]}),TypeError);
+ assert.throws(()=>evaluate({rows:[record(65,{quoteRegime:'other'})]}),TypeError);
+ assert.throws(()=>evaluate({rows:[record(65,{filledContracts:.5})]}),TypeError);
+ assert.throws(()=>evaluate({rows:[record(65,{settlementStatus:'preliminary'})]}),TypeError);
+});
+
+test('holdout evaluation is deterministic and the fitted model is never overwritten',()=>{
+ const first=evaluate(),second=evaluate({rows:futureRows().reverse()});
+ assert.deepEqual(first,second);
+ assert.equal(first.trainingId,trainingFrozen().id);
+ assert.notEqual(first.trainingId,first.holdoutReceiptId);
+});
+
+test('fewer than predeclared held-out days gives a descriptive metric but no better-model finding',()=>{
+ const r=evaluate({rows:futureRows().slice(0,12),minEvaluationDays:20});
+ assert.equal(r.independentHeldoutDays,12);
+ assert.equal(r.status,'insufficient-independent-evaluation-days');
+ assert.equal(r.conditionallyImproved,false);
+ assert.equal(r.tradeEligible,false);
+});
+
+test('a corrupted frozen model or invalid validation design cannot be scored',()=>{
+ const train=trainingFrozen();
+ assert.throws(()=>evaluate({training:{...train,modelCandidate:null}}),TypeError);
+ assert.throws(()=>evaluate({training:{...train,dayStatistics:[]}}),TypeError);
+ assert.throws(()=>evaluate({minEvaluationDays:3}),TypeError);
+ assert.throws(()=>evaluate({alpha:0}),TypeError);
+ assert.throws(()=>evaluate({rows:[]}),TypeError);
+});
+
+test('no empirical Brier improvement can ever grant an execution order or a source-rights waiver',()=>{
+ const r=evaluate();
+ assert.equal(r.kind,'outcome-fill-holdout-brier-v1');
+ assert.ok(r.limitations.some(l=>l.includes('settlement')));
+ assert.equal(r.tradeEligible,false);
+ assert.equal(r.orderEffect,false);
+ assert.equal(r.admitted,false);
 });
