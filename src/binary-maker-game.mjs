@@ -121,3 +121,76 @@ export function rankBinaryMakerPlacements(candidates){
     tradeEligible:false,orderEffect:false,
   };
 }
+
+
+/**
+ * A sharper, OUTCOME-CONDITIONED maker model (also read-only).
+ *
+ * Separate observed/estimated hazards:
+ *   q1 = P(fill | purchased outcome wins)
+ *   q0 = P(fill | purchased outcome loses)
+ *   p  = P(purchased outcome wins)
+ *
+ * Then P(win AND fill)=p*q1, P(lose AND fill)=(1-p)*q0.
+ * This explicitly models adverse selection rather than assuming fill ⟂ win.
+ * It can be computed from a properly frozen joint outcome/fill experiment,
+ * but its probability intervals are only as valid as that experiment.
+ *
+ * Expected per placement = (1-price-fee)*p*q1
+ *                          -(price+fee)*(1-p)*q0
+ *                          + reward - carry.
+ * This is multilinear on the closed rectangular parameter box; sharp minima
+ * and maxima are attained at vertices. Evaluate all eight corners; no
+ * symmetric distribution, independence, or conditional fill prior.
+ *
+ * If the upper-level fill study is biased, this does NOT cure the bias or
+ * promote any strategy. The result is conditional research with no order effect.
+ */
+export function binaryMakerOutcomeConditionedBounds({
+  side,priceUsd,makerFeeUsdPerFill=0,probabilityYes,
+  probabilityFillGivenWin,probabilityFillGivenLoss,
+  incentiveUsdPerPlacement={low:0,high:0},carryUsdPerPlacement=0,
+}={}){
+  if(!['yes','no'].includes(side))throw new TypeError('binary maker side must be yes/no');
+  if(!isMoney(priceUsd)||priceUsd>=1||!isMoney(makerFeeUsdPerFill)||
+    !isMoney(carryUsdPerPlacement))
+    throw new TypeError('finite acquired contract price, filled fee and carry required');
+  const yes=probabilityBand(probabilityYes,'YES probability');
+  const win=side==='yes'?yes:{low:1-yes.high,high:1-yes.low};
+  const q1=probabilityBand(probabilityFillGivenWin,'fill given win');
+  const q0=probabilityBand(probabilityFillGivenLoss,'fill given loss');
+  const reward=moneyBand(incentiveUsdPerPlacement,'reward scenario');
+  const cost=priceUsd+makerFeeUsdPerFill;
+  const corners=[];
+  for(const p of [win.low,win.high])for(const a of [q1.low,q1.high])for(const b of [q0.low,q0.high]){
+    const winFill=p*a,loseFill=(1-p)*b,fill=winFill+loseFill;
+    const gross=winFill-cost*fill;
+    corners.push({winProbability:p,fillGivenWin:a,fillGivenLoss:b,
+      winAndFillProbability:winFill,lossAndFillProbability:loseFill,
+      fillProbability:fill,netPnlUsdPerPlacement:gross});
+  }
+  const lower=corners.reduce((a,b)=>b.netPnlUsdPerPlacement<a.netPnlUsdPerPlacement?b:a);
+  const upper=corners.reduce((a,b)=>b.netPnlUsdPerPlacement>a.netPnlUsdPerPlacement?b:a);
+  const fillRange=corners.map(c=>c.fillProbability);
+  return {
+    kind:'binary-maker-outcome-conditioned-placement-v1',
+    side,priceUsd,makerFeeUsdPerFill,probabilityYes:yes,probabilityWin:win,
+    probabilityFillGivenWin:q1,probabilityFillGivenLoss:q0,
+    probabilityFill:{low:Math.min(...fillRange),high:Math.max(...fillRange)},
+    conditionalPnlUsdPerPlacement:{
+      low:lower.netPnlUsdPerPlacement+reward.low-carryUsdPerPlacement,
+      high:upper.netPnlUsdPerPlacement+reward.high-carryUsdPerPlacement,
+    },
+    worstCaseCoupling:lower,bestCaseCoupling:upper,
+    rewardScenarioUsdPerPlacement:reward,carryUsdPerPlacement,
+    conditionallyPositive:lower.netPnlUsdPerPlacement+reward.low-carryUsdPerPlacement>0,
+    assumptions:[
+      'conditional fill probabilities concern the exact same quote regime and holding horizon',
+      'joint settlement and fill conditional rates were validly estimated on independent past events',
+      'probability interval rectangle contains the true parameter vector',
+      'binary $1 purchased-side payout and per-filled-order fees are accurately modeled',
+      'scenario rewards are not automatically received liquidity incentives',
+    ],
+    tradeEligible:false,orderEffect:false,
+  };
+}
