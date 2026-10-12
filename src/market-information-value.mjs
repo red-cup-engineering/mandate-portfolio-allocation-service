@@ -1,3 +1,4 @@
+import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 /**
  * Expected value of sample information (EVSI), reusing the finite JOINT
  * scenario law already owned by the shared market-game.
@@ -262,28 +263,20 @@ export function conditionMarketForecastOnSignal({
     forecast, actions: admittedActions, signalModel, at,
   });
 
-  // Log-sum-exp prevents a very rare but possible signal from numerically
-  // disappearing when valid positive input probabilities are tiny.
-  const logs = forecast.scenarios.map(s => {
-    const likelihood = selected.likelihoodByScenario[s.id];
-    return s.probability > 0 && likelihood > 0 ?
-      Math.log(s.probability) + Math.log(likelihood) : -Infinity;
+  // The SAME finite Bayes kernel serves the existing stateful market game
+  // and this received-signal research path. Neither has its own optimizer.
+  const conditioned = conditionJointScenarioWeights({
+    scenarios:forecast.scenarios,
+    likelihoodByScenario:selected.likelihoodByScenario,
   });
-  const peak = Math.max(...logs);
-  if (peak === -Infinity) {
-    return {
-      kind: 'joint-market-scenario-signal-conditioning-v1',
-      status: 'observation-impossible-under-frozen-model',
-      at, priorForecastId: forecast.id, signalModelId: signalModel.id,
-      observationId: observation.id, signalId: observation.signalId,
-      forecast: null, conditionalAction: null, sourceAuthenticated: false,
-      tradeEligible: false, orderEffect: false,
-    };
-  }
-  const scaled = logs.map(l => l === -Infinity ? 0 : Math.exp(l - peak));
-  const denominator = scaled.reduce((sum, x) => sum + x, 0);
-  const posteriorMass = scaled.map(x => x / denominator);
-  const logLikelihood = peak + Math.log(denominator);
+  if(conditioned.status!=='conditioned')return {
+    kind:'joint-market-scenario-signal-conditioning-v1',
+    status:'observation-impossible-under-frozen-model',
+    at,priorForecastId:forecast.id,signalModelId:signalModel.id,
+    observationId:observation.id,signalId:observation.signalId,
+    forecast:null,conditionalAction:null,sourceAuthenticated:false,
+    tradeEligible:false,orderEffect:false,
+  };
   const posterior = {
     ...forecast,
     // This JSON tuple is a collision-free lineage label among distinct ID
@@ -297,11 +290,9 @@ export function conditionMarketForecastOnSignal({
       ...observation.evidenceIds,
     ])].sort(),
     scenarios: forecast.scenarios.map((s, i) => ({
-      ...s, probability: posteriorMass[i],
+      ...s, probability: conditioned.probabilities[i],
     })),
   };
-  const divergenceNats = posteriorMass.reduce((sum, q, i) => q === 0 ? sum :
-    sum + q * (Math.log(q) - Math.log(forecast.scenarios[i].probability)), 0);
   // Rank the SAME validated payoff menu under the RECEIVED posterior.
   // Never infer a post-signal action using the pre-signal EVSI value, nor
   // suppress an admissible rare observation through a coarse mass cutoff.
@@ -316,10 +307,10 @@ export function conditionMarketForecastOnSignal({
     status: 'conditional-research-posterior',
     at, priorForecastId: forecast.id, signalModelId: signalModel.id,
     observationId: observation.id, signalId: observation.signalId,
-    logObservationLikelihood: logLikelihood,
-    observationProbability: Math.exp(logLikelihood),
-    realizedSurprisalBits: -logLikelihood / Math.LN2,
-    posteriorPriorDivergenceNats: Math.max(0, divergenceNats),
+    logObservationLikelihood: conditioned.logObservationLikelihood,
+    observationProbability: conditioned.observationProbability,
+    realizedSurprisalBits: -conditioned.logObservationLikelihood / Math.LN2,
+    posteriorPriorDivergenceNats: conditioned.divergenceNats,
     forecast: posterior,
     conditionalAction: rankedActions === null ? null : {
       priorBestAction: assessment.baseBestAction,
