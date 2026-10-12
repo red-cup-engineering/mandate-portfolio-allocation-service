@@ -7,6 +7,7 @@ import { jointKellyForScenarioReturns } from '@red-cup-engineering/position-sizi
 import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 import {assessExecutableBook} from './executable-book.mjs';
 import { principalVenueKey, assertAccountChainScope, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
+import { assertFleetBookCapacity } from './fleet-liquidity-border.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -442,7 +443,7 @@ export function planFleet(state, policies, at) {
       if (sharedVenues.has(account.venue))
         scenarioHeldPnLCents(scenario, account.principal, account.venue, { requireScoped: true });
   const fleetPosition = hashPosition(state);
-  return principals.map(principal => {
+  const scopedDecisions = principals.map(principal => {
     const ownAccounts = accounts.filter(account => account.principal === principal), venues = new Set(ownAccounts.map(account => account.venue));
     const quotes = Object.fromEntries(Object.entries(state.quotes).filter(([,quote]) => venues.has(quote.venue)));
     const strategies = Object.fromEntries(Object.entries(state.strategies).map(([id,strategy]) => [id,{...strategy,quoteIds:strategy.quoteIds.filter(id => Object.hasOwn(quotes,id))}]).filter(([,strategy]) => strategy.quoteIds.length));
@@ -453,6 +454,8 @@ export function planFleet(state, policies, at) {
     const decision = {...body,fleetPosition};
     return {id:hashPosition(decision),...decision};
   });
+  assertFleetBookCapacity(state.quotes, scopedDecisions);
+  return scopedDecisions;
 }
 
 /** Venue consumers use the funded decision as a cap, with a matching horizon.
