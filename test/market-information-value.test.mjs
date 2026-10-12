@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateMarketInformationValue, compareMarketResearchAcquisitions} from '../src/market-information-value.mjs';
+import {evaluateMarketInformationValue, compareMarketResearchAcquisitions, conditionMarketForecastOnSignal} from '../src/market-information-value.mjs';
 
 const now='2026-10-12T20:00:00Z';
 const forecast=()=>({
@@ -183,4 +183,62 @@ test('abstention from new research is real, and duplicate candidate identifiers 
   assert.throws(() => compareMarketResearchAcquisitions({ forecast: forecast(), actions: actions(), at: now,
     candidates: [{ id: 'same', signalModel: signal() }, { id: 'same', signalModel: signal() }],
   }), /unique-research-acquisition-identity-required/);
+});
+
+
+const receivedSignal = (more={}) => ({
+  id:'AAA-received-report-1',signalId:'rising',
+  observedAt:'2026-10-12T19:30:00Z',
+  availableAt:'2026-10-12T19:40:00Z',
+  evidenceIds:['publisher-byte-receipt-1'],...more,
+});
+const conditionalModel=(correct=.8)=>({
+ ...signal(correct),conditionedOnForecastId:forecast().id,
+});
+
+test('receiving a source-conditioned observation updates every shared scenario and changes the best action',()=>{
+ const r=conditionMarketForecastOnSignal({
+  forecast:forecast(),signalModel:conditionalModel(),observation:receivedSignal(),
+  at:now,actions:actions(),
+ });
+ assert.equal(r.status,'conditional-research-posterior');
+ near(r.forecast.scenarios[0].probability,.8);
+ near(r.forecast.scenarios[1].probability,.2);
+ near(r.forecast.scenarios.reduce((s,x)=>s+x.probability,0),1);
+ assert.equal(r.conditionalAction.priorBestAction,'abstain');
+ assert.equal(r.conditionalAction.posteriorBestAction,'buy-up');
+ near(r.conditionalAction.posteriorExpectedUsd,.6);
+ assert.ok(r.posteriorPriorDivergenceNats>0);
+ assert.ok(r.forecast.evidenceIds.includes('publisher-byte-receipt-1'));
+ assert.equal(r.tradeEligible,false);
+ assert.equal(r.sourceAuthenticated,false);
+});
+
+test('a later likelihood cannot double-count a prior forecast without explicit conditional binding',()=>{
+ assert.throws(()=>conditionMarketForecastOnSignal({
+  forecast:forecast(),signalModel:signal(.8),observation:receivedSignal(),at:now,
+ }),/precommitted conditional signal/);
+ assert.throws(()=>conditionMarketForecastOnSignal({
+  forecast:forecast(),signalModel:conditionalModel(),
+  observation:receivedSignal({availableAt:'2026-10-12T22:00:00Z'}),at:now,
+ }),/precommitted conditional signal/);
+ const model=conditionalModel();model.availableAt='2026-10-12T20:00:00Z';
+ assert.throws(()=>conditionMarketForecastOnSignal({
+  forecast:forecast(),signalModel:model,observation:receivedSignal(),at:now,
+ }),/precommitted conditional signal/);
+});
+
+test('an unmodeled received signal has no posterior, not an invented decisive forecast',()=>{
+ const m=conditionalModel(.8);
+ m.signals=[
+  {id:'rising',likelihoodByScenario:{up:0,down:0}},
+  {id:'falling',likelihoodByScenario:{up:1,down:1}},
+ ];
+ const r=conditionMarketForecastOnSignal({
+  forecast:forecast(),signalModel:m,observation:receivedSignal(),at:now,actions:actions(),
+ });
+ assert.equal(r.status,'observation-impossible-under-frozen-model');
+ assert.equal(r.forecast,null);
+ assert.equal(r.conditionalAction,null);
+ assert.equal(r.orderEffect,false);
 });
