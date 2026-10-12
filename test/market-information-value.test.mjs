@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateMarketInformationValue} from '../src/market-information-value.mjs';
+import {evaluateMarketInformationValue, compareMarketResearchAcquisitions} from '../src/market-information-value.mjs';
 
 const now='2026-10-12T20:00:00Z';
 const forecast=()=>({
@@ -129,4 +129,58 @@ test('a 3-world nested-threshold gas value-of-information example retains exact 
  assert.ok(r.baseExpectedUsd>=0);
  assert.equal(r.forecastId,forecast().id);
  assert.equal(r.tradeEligible,false);
+});
+
+test('research purchases compete on one predeclared joint-scenario action menu', () => {
+  const menu = compareMarketResearchAcquisitions({ forecast: forecast(), actions: actions(), at: now,
+    candidates: [
+      { id: 'filing-surprise', signalModel: { ...signal(.9), id: 'filing-kernel' }, computeCostUsd: .1 },
+      { id: 'news-repetition', signalModel: { ...signal(.6), id: 'news-kernel' }, computeCostUsd: .3 },
+      { id: 'options-interpretation', signalModel: { ...signal(.8), id: 'options-kernel' }, computeCostUsd: .2 },
+    ],
+  });
+  assert.equal(menu.selectedResearchId, 'filing-surprise');
+  assert.deepEqual(menu.rankedAlternatives.map(x => x.id), ['filing-surprise','options-interpretation','news-repetition']);
+  assert.ok(Math.abs(menu.rankedAlternatives[0].netEvsiUsd - .7) < 1e-10);
+  assert.equal(menu.noResearchPurchased, true);
+  assert.equal(menu.tradeEligible, false);
+  assert.equal(menu.orderEffect, false);
+});
+
+test('unknown or future evidence becomes an explicit gap, never an inferred alpha source', () => {
+  const model = { ...signal(.8), id: 'future-news', availableAt: '2026-10-13T01:00:00Z' };
+  const menu = compareMarketResearchAcquisitions({ forecast: forecast(), actions: actions(), at: now,
+    candidates: [
+      { id: 'unverified-social-sentiment' },
+      { id: 'hindsight-news', signalModel: model },
+      { id: 'calibrated-filing', signalModel: signal(.8), computeCostUsd: .01 },
+    ],
+  });
+  assert.equal(menu.evidenceGaps.length, 2);
+  assert.equal(menu.selectedResearchId, 'calibrated-filing');
+  assert.equal(menu.rankedAlternatives.length, 1);
+});
+
+test('alternative interpretations of the same news cannot manufacture additive information value', () => {
+  const s = signal(.8);
+  const menu = compareMarketResearchAcquisitions({ forecast: forecast(), actions: actions(), at: now,
+    candidates: [
+      { id: 'expensive-model', signalModel: s, computeCostUsd: .2 },
+      { id: 'cheap-model', signalModel: s, computeCostUsd: .05 },
+    ],
+  });
+  assert.equal(menu.selectedResearchId, 'cheap-model');
+  assert.ok(menu.rankedAlternatives.every(x => Math.abs(x.grossEvsiUsd-.6)<1e-10));
+  assert.ok(menu.limitations.some(x => x.includes('NOT additive')));
+});
+
+test('abstention from new research is real, and duplicate candidate identifiers refuse', () => {
+  const menu = compareMarketResearchAcquisitions({ forecast: forecast(), actions: actions(), at: now,
+    candidates: [{ id: 'costly', signalModel: signal(.8), computeCostUsd: 1 }],
+  });
+  assert.equal(menu.selectedResearchId, null);
+  assert.equal(menu.selectedConditionalNetEvsiUsd, null);
+  assert.throws(() => compareMarketResearchAcquisitions({ forecast: forecast(), actions: actions(), at: now,
+    candidates: [{ id: 'same', signalModel: signal() }, { id: 'same', signalModel: signal() }],
+  }), /unique-research-acquisition-identity-required/);
 });
