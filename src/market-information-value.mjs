@@ -42,6 +42,7 @@ export function evaluateMarketInformationValue({
  repricingCostBoundUsd=0,
 }={}){
  if(!forecast||!identity(forecast.id)||!clock(forecast.observedAt)||
+    !clock(forecast.horizon)||Date.parse(forecast.horizon)<=Date.parse(at)||
     !Array.isArray(forecast.scenarios)||forecast.scenarios.length<2||
     forecast.scenarios.length>512||!Array.isArray(forecast.evidenceIds)||
     !forecast.evidenceIds.length||!clock(at)||
