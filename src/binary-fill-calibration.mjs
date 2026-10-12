@@ -148,3 +148,132 @@ export function fitBinaryOutcomeFillByDay({
   tradeEligible:false,orderEffect:false,
  };
 }
+
+
+/**
+ * Strict chronological OUT-OF-SAMPLE check for an already frozen
+ * outcome-conditioned fill fit, with a training-only unconditional
+ * fill-rate baseline. No new source parser: each evaluation receipt
+ * passes the SAME one-lot terminal-order validator as the fitter.
+ *
+ * The unit for uncertainty is one target settlement day. Each day
+ * receives equal weight even when that day contains hundreds of orders
+ * or both winning/losing market outcomes. Pair Brier differences within
+ * each date before forming the exploratory one-sided confidence bound.
+ *
+ * This evaluates P(FILL | EVENTUAL OUTCOME) conditional on a finalized
+ * outcome, i.e. a scientific adverse-selection diagnostic. The eventual
+ * outcome is NOT available to the trader at quotation time: this
+ * function cannot certify any executable strategy or provide ex-ante
+ * fill probabilities without an independent settlement model.
+ */
+export function scoreBinaryOutcomeFillHoldout({
+  training,rows=[],evaluatedAt,minEvaluationDays=20,alpha=.05,
+}={}){
+  if(!training||training.kind!=='outcome-conditioned-day-block-fill-fit-v1'||
+     !label(training.id)||!label(training.familyScope)||
+     !label(training.quoteRegime)||!['yes','no'].includes(training.side)||
+     !clock(training.freezeAt)||!clock(training.availableAt)||
+     !clock(evaluatedAt)||Date.parse(evaluatedAt)<=Date.parse(training.availableAt)||
+     !Number.isInteger(minEvaluationDays)||minEvaluationDays<10||
+     minEvaluationDays>2000||!finite(alpha)||alpha<=0||alpha>=.5||
+     !Array.isArray(training.dayStatistics)||!training.dayStatistics.length||
+     !Array.isArray(training.sourceReceiptIds)||
+     !training.modelCandidate||!training.outcomeDayEvidence?.win||
+     !training.outcomeDayEvidence?.loss||
+     !finite(training.outcomeDayEvidence.win.mean)||
+     !finite(training.outcomeDayEvidence.loss.mean)||
+     !Number.isSafeInteger(training.maxBookAgeMs))
+    throw new TypeError('valid frozen prior actual-order outcome-fill model and evaluation design required');
+  const latestTrainingDate=[...training.dayStatistics].map(r=>r.date).sort(cmp).at(-1);
+  if(!day(latestTrainingDate))throw new TypeError('training must expose verifiable source-local day support');
+  const alreadyReceived=new Set(training.sourceReceiptIds);
+  if(!Array.isArray(rows)||!rows.length||rows.length>100000)
+    throw new TypeError('nonempty bounded actually settled holdout order receipts required');
+  for(const r of rows){
+    if(!r||!day(r.targetDate)||r.targetDate<=latestTrainingDate||
+       !clock(r.placedAt)||Date.parse(r.placedAt)<=Date.parse(training.availableAt))
+      throw new RangeError('holdout must follow frozen model issuance and all training settlement days');
+    if(alreadyReceived.has(r.executionReceiptId)||
+       alreadyReceived.has(r.settlementReceiptId))
+      throw new RangeError('training evidence receipt reused in the held-out window');
+  }
+  const validated=fitBinaryOutcomeFillByDay({
+    familyScope:training.familyScope,quoteRegime:training.quoteRegime,
+    side:training.side,freezeAt:evaluatedAt,publishedAt:evaluatedAt,
+    minDaysPerOutcome:10,alpha,maxBookAgeMs:training.maxBookAgeMs,rows,
+  });
+  const means=training.outcomeDayEvidence;
+  const priorByDay=new Map();
+  for(const r of training.dayStatistics){
+    if(!day(r.date)||!Number.isSafeInteger(r.attempts)||r.attempts<1||
+       !Number.isSafeInteger(r.fills)||r.fills<0||r.fills>r.attempts)
+      throw new TypeError('training daily receipt counts are missing or inconsistent');
+    const prior=priorByDay.get(r.date)??{attempts:0,fills:0};
+    prior.attempts+=r.attempts;prior.fills+=r.fills;
+    priorByDay.set(r.date,prior);
+  }
+  const baseline=[...priorByDay.values()].reduce((a,r)=>a+r.fills/r.attempts,0)/priorByDay.size;
+  if(!finite(baseline)||baseline<0||baseline>1||
+     ![means.win.mean,means.loss.mean].every(p=>finite(p)&&p>=0&&p<=1))
+    throw new TypeError('fitted fill probabilities must lie in [0,1]');
+  const byDay=new Map();
+  for(const r of validated.dayStatistics){
+    const p=r.won?means.win.mean:means.loss.mean;
+    const forecastError=r.fills*(1-p)**2+(r.attempts-r.fills)*p**2;
+    const baselineError=r.fills*(1-baseline)**2+
+      (r.attempts-r.fills)*baseline**2;
+    const old=byDay.get(r.date)??{date:r.date,attempts:0,fills:0,
+      conditionalSquaredError:0,baselineSquaredError:0};
+    old.attempts+=r.attempts;old.fills+=r.fills;
+    old.conditionalSquaredError+=forecastError;
+    old.baselineSquaredError+=baselineError;
+    byDay.set(r.date,old);
+  }
+  const daily=[...byDay.values()].sort((a,b)=>cmp(a.date,b.date)).map(r=>{
+    const conditionalBrier=r.conditionalSquaredError/r.attempts;
+    const baselineBrier=r.baselineSquaredError/r.attempts;
+    return {date:r.date,attempts:r.attempts,fills:r.fills,
+      conditionalBrier,baselineBrier,
+      pairedImprovement:baselineBrier-conditionalBrier};
+  });
+  const days=daily.length,average=(property)=>
+    daily.reduce((sum,r)=>sum+r[property],0)/days;
+  const gain=average('pairedImprovement');
+  // Brier scores lie in [0,1]; paired improvement in [-1,+1],
+  // hence Hoeffding one-sided radius = sqrt(2*log(1/alpha)/N).
+  const radius=Math.sqrt(2*Math.log(1/alpha)/days);
+  const lowerBound=gain-radius;
+  const enough=days>=minEvaluationDays;
+  const studyId=hashPosition({kind:'outcome-fill-holdout-brier-v1',
+    trainingId:training.id,evaluationId:validated.id,
+    evaluatedAt,minEvaluationDays,alpha});
+  return {
+    kind:'outcome-fill-holdout-brier-v1',
+    id:studyId,trainingId:training.id,holdoutReceiptId:validated.id,
+    familyScope:training.familyScope,quoteRegime:training.quoteRegime,
+    side:training.side,trainedAvailableAt:training.availableAt,
+    evaluatedAt,latestTrainingDate,
+    independentHeldoutDays:days,actualHeldoutOrderCount:rows.length,
+    trainingUnconditionalFillProbability:baseline,
+    trainingFillGivenWin:means.win.mean,trainingFillGivenLoss:means.loss.mean,
+    holdoutBrier:{
+      outcomeConditioned:average('conditionalBrier'),
+      unconditional:average('baselineBrier'),
+      pairedImprovement:gain,
+      exploratoryOneSidedLowerBound:lowerBound,
+      exploratoryRadius:radius,
+    },
+    perDay:daily,
+    status:enough?'held-out-research-screen':'insufficient-independent-evaluation-days',
+    conditionallyImproved:enough&&lowerBound>0,
+    limitations:[
+      'test days are later than the fit freeze and contain actual terminal one-contract venue receipts',
+      'Brier compares fill probabilities conditioned on eventual settlement, which cannot be observed before a trade',
+      'day-block Hoeffding bound assumes stable independent days; model-family selection multiplicity is uncorrected',
+      'historical fills may be selection-biased and do not establish a causal effect of changing a quote',
+      'holdout forecast improvement alone never proves trading P&L or admits an automated order',
+    ],
+    admitted:false,tradeEligible:false,orderEffect:false,
+  };
+}
