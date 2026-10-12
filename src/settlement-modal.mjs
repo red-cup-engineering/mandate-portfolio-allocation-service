@@ -18,7 +18,9 @@
 const validEdge = (x) => typeof x === 'number' && !Number.isNaN(x);
 const validInterval = (x) => x && validEdge(x.lower) && validEdge(x.upper) && x.lower <= x.upper;
 const nonempty = (x) => typeof x === 'string' && x.trim().length > 0;
-const timestamp = (x) => typeof x === 'string' && Number.isFinite(Date.parse(x));
+const timestamp = (x) => typeof x === 'string' &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(x) &&
+  Number.isFinite(Date.parse(x));
 const intersects = (a,b) => !(a.upper < b.lower || b.upper < a.lower);
 const inside = (a,b) => a.lower >= b.lower && a.upper <= b.upper;
 const intersection = (a,b) => ({lower:Math.max(a.lower,b.lower), upper:Math.min(a.upper,b.upper)});
@@ -64,6 +66,36 @@ export function deduceSettlementInterval({payout,premises=[],at}={}) {
     // The intersection can prove a proposition even when no single premise does.
     // Retain the premise list to make the derivation independently checkable.
     add(combined,used.map(x=>x.id));
+  }
+  if(conflict) {
+    // Non-explosion does not require forgetting every consistent subfamily.
+    // For closed intervals on the real line, any finite nonempty intersection
+    // is determined by at most TWO bounds: a maximal lower endpoint and a
+    // minimal upper endpoint. Therefore a compatible pair can prove a payout
+    // even when a third, independent interval makes the total intersection
+    // inconsistent. Find one deterministic minimal-size witness in O(n), not
+    // by exponential subset enumeration or by accepting an empty intersection.
+    //
+    // Ignore already-sufficient singleton intervals: they have their own
+    // independent witnesses above. A nontrivial pair must tighten the lower
+    // boundary from one source and the upper boundary from another.
+    let floor=null,ceiling=null;
+    for(const p of used) {
+      if(inside(p,payout))continue;
+      if(p.lower>=payout.lower&&
+         (floor===null||p.lower<floor.lower||
+          (p.lower===floor.lower&&p.id.localeCompare(floor.id)<0)))
+        floor=p;
+      if(p.upper<=payout.upper&&
+         (ceiling===null||p.upper>ceiling.upper||
+          (p.upper===ceiling.upper&&p.id.localeCompare(ceiling.id)<0)))
+        ceiling=p;
+    }
+    if(floor&&ceiling&&floor.id!==ceiling.id) {
+      const pair=intersection(floor,ceiling);
+      if(validInterval(pair)&&inside(pair,payout))
+        add(pair,[floor.id,ceiling.id].sort((a,b)=>a.localeCompare(b)));
+    }
   }
   // Do not use the empty intersection as proof of *anything*.
   const openWorld=common===null?null:conflict?null:{
