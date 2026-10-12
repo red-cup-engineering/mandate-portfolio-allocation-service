@@ -7,6 +7,7 @@
     ".": "./src/allocate.mjs",
     "./allocate-opportunities": "./src/allocate-opportunities.mjs",
     "./market-game": "./src/market-game.mjs",
+    "./settlement-modal": "./src/settlement-modal.mjs",
     "./public-observations": "./src/public-observations.mjs",
     "./research-publication": "./src/research-publication.mjs",
     "./play": "./src/play.mjs",
