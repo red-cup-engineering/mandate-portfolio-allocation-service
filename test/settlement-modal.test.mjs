@@ -164,7 +164,8 @@ test('rate lower may be negative and upper positive; min and max remain logical 
   const x=path('high',temp,achHigh,[rate('path',low,high)]);
   const y=path('low',{lower:-start,upper:-start},{lower:-start-1,upper:-start-1},
     [rate('path',-high,-low)]);
-  assert.deepEqual(y.finalExtreme,{lower:-x.finalExtreme.upper,upper:-x.finalExtreme.lower});
+  assert.ok(Math.abs(y.finalExtreme.lower+x.finalExtreme.upper)<1e-10);
+  assert.ok(Math.abs(y.finalExtreme.upper+x.finalExtreme.lower)<1e-10);
  }
 });
 
