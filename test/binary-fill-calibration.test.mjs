@@ -100,7 +100,7 @@ test('the final exchange result of one market cannot be both YES and NO',()=>{
 test('failed or unconfirmed market orders cannot be quietly counted as definite no-fills',()=>{
  assert.throws(()=>fit({rows:[record(0,{settlementStatus:'provisional'})]}),TypeError);
  assert.throws(()=>fit({rows:[record(0,{executionReceiptId:''})]}),TypeError);
- assert.throws(()=>fit({rows:[record(0,{filled:false,fillReceivedAt:'2026-05-01T12:05:00Z'})]}),RangeError);
+ assert.throws(()=>fit({rows:[record(0,{filled:false,filledContracts:0,fillReceivedAt:'2026-05-01T12:05:00Z'})]}),RangeError);
  assert.throws(()=>fit({rows:[record(0,{filled:true,fillReceivedAt:undefined})]}),RangeError);
 });
 
@@ -130,6 +130,7 @@ test('calibration identity commits actual outcome, fill and hyperparameters, not
  const original=fit();
  const flipped=rows();
  flipped[0]={...flipped[0],filled:!flipped[0].filled,
+   filledContracts:flipped[0].filled?0:1,
    ...(flipped[0].filled?{fillReceivedAt:undefined}:{fillReceivedAt:flipped[0].placedAt})};
  const revised=fit({rows:flipped});
  assert.notEqual(revised.id,original.id,'changed received fill result needs a new content address');
