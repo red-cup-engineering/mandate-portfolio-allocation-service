@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fitBinaryOutcomeFillByDay,scoreBinaryOutcomeFillHoldout} from '../src/binary-fill-calibration.mjs';
+import {fitBinaryOutcomeFillByDay,scoreBinaryOutcomeFillHoldout,bindScreenedOutcomeFillResearch} from '../src/binary-fill-calibration.mjs';
 
 const familyScope='AAA-national-regular-directional-greater',
  regime='rest-yes-95c|queue-0|horizon-240m',side='yes';
@@ -251,4 +251,81 @@ test('no empirical Brier improvement can ever grant an execution order or a sour
  assert.equal(r.tradeEligible,false);
  assert.equal(r.orderEffect,false);
  assert.equal(r.admitted,false);
+});
+
+
+const testedStudy=()=>evaluate();
+const bind=(options={})=>bindScreenedOutcomeFillResearch({
+ training:trainingFrozen(),holdout:testedStudy(),
+ holdoutPublishedAt:'2026-10-01T01:00:00Z',
+ at:'2026-10-02T00:00:00Z',familyScope,quoteRegime:regime,side,...options,
+});
+
+test('ordinary unproven holdout improvement must not become a live or research-quoted maker edge',()=>{
+ const b=bind();
+ assert.equal(b.status,'insufficient-heldout-improvement');
+ assert.equal(b.tradeEligible,false);
+ assert.equal(b.fillEvidence,undefined);
+});
+
+test('a strongly improved SYNTHETIC historical holdout may expose research-only upstream fill bands',()=>{
+ const train=trainingFrozen();
+ const synthetic=Array.from({length:300},(_,i)=>{
+  const r=record(i+61),fill=r.settlementSide==='yes';
+  return {...r,filled:fill,filledContracts:Number(fill),
+   fillReceivedAt:fill?r.placedAt:undefined};
+ });
+ const held=scoreBinaryOutcomeFillHoldout({
+  training:train,rows:synthetic,
+  evaluatedAt:'2028-01-01T00:00:00Z',alpha:.05,minEvaluationDays:30,
+ });
+ assert.ok(held.holdoutBrier.exploratoryOneSidedLowerBound>0);
+ assert.equal(held.conditionallyImproved,true);
+ const b=bindScreenedOutcomeFillResearch({
+  training:train,holdout:held,
+  holdoutPublishedAt:'2028-01-01T01:00:00Z',
+  at:'2028-01-02T00:00:00Z',familyScope,quoteRegime:regime,side,
+ });
+ assert.equal(b.status,'exploratory-heldout-screened');
+ assert.equal(b.fillEvidence.kind,'outcome-conditioned');
+ assert.equal(b.fillEvidence.scope,familyScope);
+ assert.equal(b.fillEvidence.availableAt,'2028-01-01T01:00:00Z');
+ assert.deepEqual(b.probabilityFillGivenWin,train.modelCandidate.probabilityFillGivenWin);
+ assert.deepEqual(b.probabilityFillGivenLoss,train.modelCandidate.probabilityFillGivenLoss);
+ assert.equal(b.tradeEligible,false);
+ assert.equal(b.orderEffect,false);
+});
+
+test('source, side, quote cohort and publication clocks must all match for fill-study binding',()=>{
+ assert.throws(()=>bind({familyScope:'diesel|another-market'}),TypeError);
+ assert.throws(()=>bind({quoteRegime:'rest-yes-98c'}),TypeError);
+ assert.throws(()=>bind({side:'no'}),TypeError);
+ assert.throws(()=>bind({holdoutPublishedAt:'2026-09-30T00:00:00Z'}),TypeError);
+ assert.throws(()=>bind({holdoutPublishedAt:'2026-10-03T00:00:00Z'}),TypeError);
+ assert.throws(()=>bind({training:{...trainingFrozen(),id:'other-model'}}),TypeError);
+});
+
+test('mutated confidence score cannot masquerade as the original source-linked heldout analysis',()=>{
+ const r=testedStudy();
+ const fake={...r,conditionallyImproved:true,
+  holdoutBrier:{...r.holdoutBrier,exploratoryOneSidedLowerBound:.1}};
+ assert.throws(()=>bind({holdout:fake}),RangeError);
+ const changed={...r,perDay:[...r.perDay]};
+ changed.perDay[1]={...changed.perDay[0]};
+ assert.throws(()=>bind({holdout:changed}),TypeError);
+ const wrong={...r,independentHeldoutDays:r.independentHeldoutDays+1};
+ assert.throws(()=>bind({holdout:wrong}),TypeError);
+ const wrongId={...r,id:'fabricated-score-receipt'};
+ assert.throws(()=>bind({holdout:wrongId}),RangeError);
+});
+
+test('frozen mean outside claimed fill interval is rejected even if external screen claims success',()=>{
+ const trained=trainingFrozen();
+ const wrong={...trained,modelCandidate:{
+  ...trained.modelCandidate,
+  probabilityFillGivenWin:{low:.9,high:1},
+ }};
+ // This is normally blocked by the negative original holdout score; the
+ // lower-level consistency precondition must never be a source of authority.
+ assert.equal(bind({training:wrong}).status,'insufficient-heldout-improvement');
 });
