@@ -35,6 +35,10 @@ export function projectConditionalSettlementSign({
  if(!identity(subject)||!identity(predicate)||!context||
    typeof context!=='object'||Array.isArray(context)||
    !identity(context.rules)||!identity(context.source)||
+   !identity(context.assumption)||
+   !/^\d{4}-\d{2}-\d{2}$/.test(context.targetDate??'')||
+   !Number.isFinite(Date.parse(context.targetDate+'T00:00:00Z'))||
+   new Date(context.targetDate+'T00:00:00Z').toISOString().slice(0,10)!==context.targetDate||
    !CHANNELS.includes(channel)||!available(at))
   throw new TypeError('source- and rule-bound SignCell context, channel and time required');
  const deduction=deduceSettlementInterval({payout,premises,at});
