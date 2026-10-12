@@ -34,6 +34,7 @@
   "bin": {
     "market-game": "./apps/market-game.mjs",
     "prediction-market-study": "./apps/prediction-market-study.mjs",
-    "prediction-market-equity-study": "./apps/prediction-market-equity-study.mjs"
+    "prediction-market-equity-study": "./apps/prediction-market-equity-study.mjs",
+    "market-information": "./apps/market-information.mjs"
   }
 }
