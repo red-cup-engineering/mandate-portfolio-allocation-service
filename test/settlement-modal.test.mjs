@@ -210,3 +210,48 @@ test('derived extrema contain every sampled continuous-rate path under the same 
   }
  }
 });
+
+
+test('compatible source pair retains a FOR proof even if a third source contradicts it',()=>{
+ const payout={lower:4,upper:5};
+ const ps=[certificate('lower',4.25,10),
+   certificate('upper',-10,4.75),certificate('opposed',7,8)];
+ const a=run(payout,ps),b=run(payout,ps.slice().reverse());
+ assert.deepEqual(a,b,'source order must not change paraconsistent knowledge');
+ assert.equal(a.inconsistentPremises,true);
+ assert.equal(a.admissibleWorlds,null,'inconsistent global domain gives no closed-world answer');
+ assert.equal(a.support.for.length,1,'the compatible pair is still a sound conditional proof');
+ assert.deepEqual(a.support.for[0].premises,['lower','upper']);
+ assert.deepEqual(a.support.for[0].interval,{lower:4.25,upper:4.75});
+ assert.equal(a.support.against.length,1,'the opposed independent witness is retained');
+ assert.deepEqual(a.support.against[0].premises,['opposed']);
+ assert.equal(a.orderEffect,false);
+});
+
+test('finite interval-subfamily soundness: contradictory additions cannot erase independent support',()=>{
+ const intervals=[];
+ for(let l=-2;l<=2;l++)for(let u=l;u<=2;u++)intervals.push({lower:l,upper:u});
+ const payout={lower:0,upper:1},inside=(x)=>x.lower>=0&&x.upper<=1;
+ let examined=0;
+ for(let i=0;i<intervals.length;i++)for(let j=0;j<intervals.length;j++)
+ for(let k=0;k<intervals.length;k++){
+   const xs=[intervals[i],intervals[j],intervals[k]];
+   const hasFiniteSubproof=xs.some(inside)||xs.some((a,m)=>
+     xs.some((b,n)=>{
+       if(m===n)return false;
+       const c={lower:Math.max(a.lower,b.lower),upper:Math.min(a.upper,b.upper)};
+       return c.lower<=c.upper&&inside(c);
+     }));
+   const result=run(payout,xs.map((x,n)=>certificate('c'+n,x.lower,x.upper)));
+   assert.equal(result.support.for.length>0,hasFiniteSubproof,
+     'every finite compatible subproof is preserved and no empty intersection proves');
+   examined++;
+ }
+ assert.equal(examined,intervals.length**3);
+});
+
+test('only offset-aware clocks enter the modal knowledge filtration',()=>{
+ assert.throws(()=>run({lower:0,upper:1},[],{at:'2026-10-11T20:00:00'}),TypeError);
+ assert.throws(()=>run({lower:0,upper:1},[
+   certificate('local-receipt',0,1,'2026-10-11T19:00:00')]),TypeError);
+});
