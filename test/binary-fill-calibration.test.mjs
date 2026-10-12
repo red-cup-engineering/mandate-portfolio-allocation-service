@@ -13,7 +13,8 @@ const record=(i,overrides={})=>{
   familyScope,quoteRegime:regime,side,
   eventId:'KXAAAGASD-'+date,marketId:'KXAAAGASD-'+date+'-4.0000',
   targetDate:date,settlementSide:won?'yes':'no',
-  settlementStatus:'finalized',filled,
+  settlementStatus:'finalized',filled,attemptedContracts:1,
+  filledContracts:filled?1:0,
   bookReceivedAt:date+'T11:59:30Z',placedAt:date+'T12:00:00Z',
   terminalAt:date+'T12:10:00Z',settledAt:date+'T15:00:00Z',
   settlementAvailableAt:date+'T16:00:00Z',
@@ -143,4 +144,12 @@ test('calibration identity commits actual outcome, fill and hyperparameters, not
  assert.notEqual(newThreshold.id,original.id);
  const stricterBook=fit({maxBookAgeMs:45_000});
  assert.notEqual(stricterBook.id,original.id);
+});
+
+
+test('partially filled and multi-lot orders cannot distort the binary one-lot fill hazard',()=>{
+ assert.throws(()=>fit({rows:[record(0,{attemptedContracts:2,filledContracts:1})]}),TypeError);
+ assert.throws(()=>fit({rows:[record(0,{attemptedContracts:1,filledContracts:.25})]}),TypeError);
+ assert.throws(()=>fit({rows:[record(0,{attemptedContracts:1,filledContracts:0,filled:true})]}),TypeError);
+ assert.throws(()=>fit({rows:[record(0,{attemptedContracts:1,filledContracts:1,filled:false})]}),TypeError);
 });
