@@ -40,12 +40,13 @@ const cmp=(a,b)=>a.localeCompare(b);
  */
 export function fitBinaryOutcomeFillByDay({
  familyScope,quoteRegime,side,freezeAt,publishedAt,rows=[],
- minDaysPerOutcome=30,alpha=.05,
+ minDaysPerOutcome=30,alpha=.05,maxBookAgeMs=60000,
 }={}){
  if(!label(familyScope)||!label(quoteRegime)||!['yes','no'].includes(side)||
     !clock(freezeAt)||!clock(publishedAt)||Date.parse(publishedAt)<Date.parse(freezeAt)||
     !Number.isInteger(minDaysPerOutcome)||minDaysPerOutcome<10||minDaysPerOutcome>2000||
     !finite(alpha)||alpha<=0||alpha>=.5||
+    !Number.isSafeInteger(maxBookAgeMs)||maxBookAgeMs<1||maxBookAgeMs>3600_000||
     !Array.isArray(rows)||rows.length>100000)
   throw new TypeError('bounded source-family, quote-regime, calibration cutoff and published model time required');
  const cutoff=Date.parse(freezeAt);
@@ -66,7 +67,7 @@ export function fitBinaryOutcomeFillByDay({
   const bt=Date.parse(r.bookReceivedAt),placed=Date.parse(r.placedAt);
   const terminal=Date.parse(r.terminalAt),settled=Date.parse(r.settledAt);
   const available=Date.parse(r.settlementAvailableAt);
-  if(bt>placed||placed>=terminal||terminal>available||settled>available||
+  if(bt>placed||placed-bt>maxBookAgeMs||placed>=terminal||terminal>settled||settled>available||
      available>=cutoff||placed>=settled)
    throw new RangeError('lookahead, missing terminal custody or unsettled training data refused');
   if(r.filled&&(!clock(r.fillReceivedAt)||Date.parse(r.fillReceivedAt)<placed||
@@ -112,13 +113,13 @@ export function fitBinaryOutcomeFillByDay({
  const provenance=accepted.sort((a,b)=>cmp(a.venueOrderId,b.venueOrderId));
  const modelId=hashPosition({
   kind:'outcome-conditioned-day-block-fill-fit-v1',
-  familyScope,quoteRegime,side,freezeAt,publishedAt,
+  familyScope,quoteRegime,side,freezeAt,publishedAt,maxBookAgeMs,
   sourceOrders:provenance.map(x=>[x.venueOrderId,x.settlementReceiptId,
    x.executionReceiptId,x.settlementAvailableAt]),
  });
  return {
   kind:'outcome-conditioned-day-block-fill-fit-v1',
-  id:modelId,familyScope,quoteRegime,side,freezeAt,
+  id:modelId,familyScope,quoteRegime,side,freezeAt,maxBookAgeMs,
   availableAt:publishedAt,
   admitted:false,status:ready?'exploratory-intervals':'insufficient-independent-outcome-days',
   modelCandidate:ready?{
