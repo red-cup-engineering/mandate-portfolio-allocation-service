@@ -21,7 +21,8 @@
     "./equity-prediction-market-research": "./src/equity-prediction-market-research.mjs",
     "./settlement-sign-evidence": "./src/settlement-sign-evidence.mjs",
     "./joint-scenario-condition": "./src/joint-scenario-condition.mjs",
-    "./scenario-sign-history": "./src/scenario-sign-history.mjs"
+    "./scenario-sign-history": "./src/scenario-sign-history.mjs",
+    "./joint-threshold-pushforward": "./src/joint-threshold-pushforward.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
