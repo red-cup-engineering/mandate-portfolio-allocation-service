@@ -105,10 +105,12 @@ export function evaluateMarketInformationValue({
   }));
   const best=[...candidates].sort((a,b)=>
     b.probabilityWeightedPayoffUsd-a.probabilityWeightedPayoffUsd||a.id.localeCompare(b.id))[0];
+  // A nonzero rare observation can have material dollar EVSI; the simplex
+  // normalization tolerance is NOT permission to erase that signal.
   return {signal:z.id,probability:mass,
-    bestAction:mass>tol?best.id:null,
-    probabilityWeightedPayoffUsd:mass>tol?best.probabilityWeightedPayoffUsd:0,
-    conditionalExpectedUsd:mass>tol?best.probabilityWeightedPayoffUsd/mass:null};
+    bestAction:mass>0?best.id:null,
+    probabilityWeightedPayoffUsd:mass>0?best.probabilityWeightedPayoffUsd:0,
+    conditionalExpectedUsd:mass>0?best.probabilityWeightedPayoffUsd/mass:null};
  });
  const gross=average(signals.map(z=>z.probabilityWeightedPayoffUsd))-priorBest.expectedUsd;
  // Floating cancellation on an exactly uninformative kernel is not

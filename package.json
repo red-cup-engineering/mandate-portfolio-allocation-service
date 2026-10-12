@@ -22,7 +22,8 @@
     "./settlement-sign-evidence": "./src/settlement-sign-evidence.mjs",
     "./joint-scenario-condition": "./src/joint-scenario-condition.mjs",
     "./scenario-sign-history": "./src/scenario-sign-history.mjs",
-    "./joint-threshold-pushforward": "./src/joint-threshold-pushforward.mjs"
+    "./joint-threshold-pushforward": "./src/joint-threshold-pushforward.mjs",
+    "./joint-scenario-ambiguity": "./src/joint-scenario-ambiguity.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

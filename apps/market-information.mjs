@@ -9,6 +9,7 @@
  *   market-information assess packet.json     # signal acquisition EVSI
  *   market-information compare packet.json    # alternative research purchases
  *   market-information condition packet.json  # update on actual signal receipt
+ *   market-information robust packet.json     # joint-law TV robustness and regret
  */
 import {readFile} from 'node:fs/promises';
 import {
@@ -16,10 +17,11 @@ import {
   compareMarketResearchAcquisitions,
   conditionMarketForecastOnSignal,
 } from '../src/market-information-value.mjs';
+import {evaluateJointScenarioAmbiguity} from '../src/joint-scenario-ambiguity.mjs';
 
 const [mode, path, ...rest] = process.argv.slice(2);
-if (!['assess','compare','condition'].includes(mode) || !path || rest.length)
-  throw new TypeError('usage: market-information assess|compare|condition INPUT.json');
+if (!['assess','compare','condition','robust'].includes(mode) || !path || rest.length)
+  throw new TypeError('usage: market-information assess|compare|condition|robust INPUT.json');
 const source = await readFile(path);
 if (source.length > 16_000_000)
   throw new RangeError('joint scenario research packet exceeds 16 MB');
@@ -28,6 +30,7 @@ const operations = {
   assess: evaluateMarketInformationValue,
   compare: compareMarketResearchAcquisitions,
   condition: conditionMarketForecastOnSignal,
+  robust: evaluateJointScenarioAmbiguity,
 };
 const report = operations[mode](input);
 process.stdout.write(JSON.stringify({

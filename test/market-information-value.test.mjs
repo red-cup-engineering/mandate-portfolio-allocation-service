@@ -62,6 +62,30 @@ test('computation and rival repricing costs can make valuable information unecon
  assert.equal(r.shouldAcquireConditional,false);
 });
 
+test('rare but possible preissued signal retains nonzero expected dollar value',()=>{
+ const f=forecast();
+ const model={
+  id:'rare-receipt-calibrated-beforehand',
+  availableAt:'2026-10-12T19:00:00Z',
+  sourceEvidenceIds:['preissued-rare-event-calibration'],
+  signals:[
+   {id:'rare-up',likelihoodByScenario:{up:1e-10,down:0}},
+   {id:'ordinary',likelihoodByScenario:{up:1-1e-10,down:1}},
+  ],
+ };
+ const menu=[
+  {id:'abstain',payoffsUsdByScenario:{up:0,down:0}},
+  {id:'leveraged-contingent-exposure',payoffsUsdByScenario:{up:1e10,down:-1e10}},
+ ];
+ const r=evaluate({forecast:f,actions:menu,signalModel:model});
+ const rare=r.signals.find(s=>s.signal==='rare-up');
+ near(rare.probability,5e-11);
+ assert.equal(rare.bestAction,'leveraged-contingent-exposure');
+ near(rare.probabilityWeightedPayoffUsd,.5);
+ near(r.grossEvsiUsd,.5);
+ assert.equal(r.tradeEligible,false);
+});
+
 test('zero-probability signal is ignored instead of producing NaN posteriors',()=>{
  const m=signal(1);
  m.signals.push({id:'never-seen',likelihoodByScenario:{up:0,down:0}});

@@ -14,6 +14,7 @@ import {cell,address,evidence,sidesOf} from '@red-cup-engineering/signcell/cell'
 import {knowledgeJoin} from '@red-cup-engineering/signchain/bilattice';
 import {deduceSettlementInterval} from './settlement-modal.mjs';
 import {conditionMarketForecastOnSignal} from './market-information-value.mjs';
+import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 
 const identity=s=>typeof s==='string'&&s.trim().length>0;
 const available=t=>typeof t==='string'&&Number.isFinite(Date.parse(t));
@@ -148,4 +149,74 @@ export function projectObservedScenarioConditioningSign({
   // reliability, source publisher or actual exchange settlement.
   sourceAuthenticated:false,tradeEligible:false,orderEffect:false,
  };
+}
+
+
+/**
+ * A conditional distributionally robust ACTION evaluation in the existing
+ * SignCell/SignChain knowledge carrier. The sign asserts that the finite
+ * mathematical derivation follows from the explicitly named assumptions;
+ * it does not assert that a calibration radius is empirically correct.
+ *
+ * Numerical input and output are committed in the canonical cell address so
+ * a reused forecast ID or action ID cannot borrow an earlier calculation.
+ * Downstream SignGraph/SignCraft use the standard premise relations, not a
+ * bespoke proof graph, journal, signing method or executable order intent.
+ */
+export function projectConditionalRobustActionSign({
+  forecast,actions,ambiguity,at,context,
+}={}){
+  if(!context||typeof context!=='object'||Array.isArray(context)||
+    !identity(context.source)||!identity(context.rules)||
+    !identity(context.scope)||!identity(context.assumption))
+    throw new TypeError('named source, rule, scope and assumption context required');
+  const result=evaluateJointScenarioAmbiguity({forecast,actions,ambiguity,at});
+  const scenarioIds=[...forecast.scenarios.map(s=>s.id)].sort();
+  const premiseIds=[...new Set([
+    forecast.id,...forecast.evidenceIds,...ambiguity.evidenceIds,
+  ])].sort();
+  const proof={
+    premises:premiseIds,
+    rule:'finite-joint-total-variation-action-evaluation',
+    scope:'conditional-on-unverified-predecision-calibration-radius',
+  };
+  const joined=knowledgeJoin(
+    evidence({for:[proof],against:[]}),
+    evidence({for:[],against:[]}),
+  );
+  const details={
+    ...context,
+    condition:'model-conditional-ambiguity-evaluation',
+    inference:proof.rule,
+    availableAt:at,
+    forecastId:forecast.id,
+    forecastAvailableAt:forecast.availableAt??forecast.observedAt,
+    ambiguityObservedAt:ambiguity.observedAt,
+    ambiguityAvailableAt:ambiguity.availableAt,
+    ambiguityEvidenceIds:[...ambiguity.evidenceIds].sort(),
+    assumedTotalVariationRadius:result.assumedTotalVariationRadius,
+    // All actual scenario weights and action payoffs belong to the address.
+    priorScenarioWeights:scenarioIds.map(id=>[
+      id,forecast.scenarios.find(s=>s.id===id).probability,
+    ]),
+    actionPayoffVectors:[...actions].sort((a,b)=>a.id.localeCompare(b.id))
+      .map(a=>[a.id,scenarioIds.map(id=>[id,a.payoffsUsdByScenario[id]])]),
+    robustValues:[...result.actionEvaluations]
+      .sort((a,b)=>a.id.localeCompare(b.id))
+      .map(a=>[a.id,a.nominalExpectedUsd,a.worstCaseExpectedUsd,
+        a.bestCaseExpectedUsd,a.worstCaseRegretUsd]),
+    maximinAction:result.maximinExpectedPayoffAction,
+    minimaxRegretAction:result.minimaxRegretAction,
+  };
+  const sign=cell(forecast.id,
+    'has-conditionally-derived-joint-scenario-robust-action-evaluation',
+    details,joined);
+  return Object.freeze({
+    kind:'conditional-robust-action-sign-projection-v1',
+    at,context:details,cell:sign,address:address(sign),
+    evaluation:result,premiseIds,
+    sourceRelations:[{side:'for',rule:proof.rule,premises:premiseIds}],
+    sourceAuthenticated:false,radiusEmpiricallyVerified:false,
+    tradeEligible:false,orderEffect:false,
+  });
 }

@@ -145,6 +145,60 @@ not a substitute for the canonical SignCell content address. The original
 stateful market game's `condition` move retains its existing
 `hashPosition` adoption semantics and out-of-sample calibration gate.
 
+## Distributionally robust cross-venue decisions (research-only)
+
+The shared joint-scenario ambiguity module is a further numerical consumer of
+the SAME market-game finite scenarios. It does not create an Alpaca, Kalshi or
+GMX-specific probability engine. Existing actions use their already defined
+complete scenario-dependent **net USD payoffs**, including fee, inventory,
+collateral, borrowing, funding, liquidation and adverse-fill assumptions as
+applicable. Cash and grant constraints must still be applied by the existing
+venue and principal admission layers; this operator neither moves capital
+between venues nor constructs an order.
+
+Given the prior joint law p and an explicitly assumed total-variation radius
+epsilon, it calculates for each feasible action a:
+
+- the nominal value E_p[U(a,S)];
+- the exact min/max E_q[U(a,S)] over joint laws q with TV(q,p) <= epsilon;
+- the worst fixed-action regret max_b max_q E_q[U(b,S)-U(a,S)];
+- a conditional maximin-expected-payoff action and a minimax-regret action,
+  which **may be different** and have no implied execution authority.
+
+The finite-simplex extremum is obtained by transferring up to epsilon
+probability from states with larger payoffs to those with smaller payoffs.
+Its returned extremal scenario vectors can be independently checked.
+This is neither interval-by-venue arithmetic nor a robust Kelly/log-growth
+optimizer, and the action menu must represent feasible *whole* cross-venue
+packages rather than pretend that one venue's free cash belongs to another.
+
+Run the same research entrypoint with its fourth mode:
+
+```sh
+node apps/market-information.mjs robust examples/joint-ambiguity.json
+```
+
+A real packet must supply the existing shared `forecast`, a fixed `actions` menu including
+exact zero-payoff abstention, decision time `at`, and an `ambiguity`
+record naming the exact `conditionedOnForecastId`, original observation
+and availability clocks, source evidence IDs, and `totalVariationRadius`.
+The included example is deliberately **synthetic**, not calibrated market
+evidence or a proposed funded trade. A numerical radius is a caller premise,
+never a statistical coverage guarantee manufactured by the optimizer.
+
+`projectConditionalRobustActionSign` in `./settlement-sign-evidence` projects
+this conditional numerical derivation through actual SignCell and SignChain
+knowledge, committing the entire joint prior, action payoff vectors, radius,
+assumption context and evaluations into its canonical cell address. It
+exposes standard premise relations for downstream SignGraph/SignCraft use.
+The proof witnesses the *conditional calculation*, not radius calibration,
+publisher authentication, model skill, a positive alpha estimate, or a
+permission to trade. Coesite must independently receive original evidence and
+journal revisions before a result can be treated as operational evidence.
+Any 561 Group or Causeway public-facing explanation should expose the
+assumption and abstention explicitly, and must not disclose principal books,
+wallet authority or private order data.
+
 ## Native SignCraft/SignGraph receipt composition
 
 The `./scenario-sign-history` export is an executable, pure bridge from a

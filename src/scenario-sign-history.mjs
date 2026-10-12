@@ -183,3 +183,121 @@ export function composeConditionalScenarioHistory({
     tradeEligible:false,orderEffect:false,
   });
 }
+
+
+/**
+ * Native SignCraft/SignGraph receiving bridge for the conditional joint
+ * ambiguity proof. Reuses the existing source-receipt SignCell predicate.
+ *
+ * Unlike the observed-signal composer, this expects all original-source and
+ * model-receipt cells ALREADY in the supplied SignCraft history. A numerical
+ * forecast ID and a radius claim must not conjure authenticated source bytes
+ * or create an unsupported alternate receipt format.
+ *
+ * Different ambiguity assumptions are allowed as nonfunctional propositions;
+ * they are not contradictory assertions of an authenticated market outcome.
+ */
+export function composeConditionalRobustActionHistory({
+  history=createHistory(),projection,
+  source='prediction-market-joint-ambiguity-research',
+}={}){
+  validateHistory(history);
+  if(!named(source)||projection?.kind!=='conditional-robust-action-sign-projection-v1'||
+    projection.sourceAuthenticated!==false||
+    projection.radiusEmpiricallyVerified!==false||
+    projection.tradeEligible!==false||projection.orderEffect!==false||
+    !instant(projection.at)||!named(projection.address)||
+    !projection.cell||address(projection.cell)!==projection.address||
+    projection.cell.predicate!==
+      'has-conditionally-derived-joint-scenario-robust-action-evaluation'||
+    !same(projection.cell.object,projection.context)||
+    projection.cell.subject!==projection.evaluation?.forecastId||
+    projection.evaluation?.kind!=='joint-scenario-conditional-ambiguity-evaluation-v1'||
+    projection.evaluation.at!==projection.at||
+    !Array.isArray(projection.premiseIds)||projection.premiseIds.length<2||
+    new Set(projection.premiseIds).size!==projection.premiseIds.length||
+    !projection.premiseIds.every(named)||
+    !Array.isArray(projection.cell.for)||projection.cell.for.length!==1||
+    !Array.isArray(projection.cell.against)||projection.cell.against.length!==0||
+    projection.cell.for[0]?.rule!=='finite-joint-total-variation-action-evaluation'||
+    !same([...projection.cell.for[0].premises].sort(),
+      [...projection.premiseIds].sort())||
+    !Array.isArray(projection.sourceRelations)||
+    projection.sourceRelations.length!==1||
+    projection.sourceRelations[0]?.side!=='for'||
+    projection.sourceRelations[0]?.rule!==projection.cell.for[0].rule||
+    !same([...projection.sourceRelations[0].premises].sort(),
+      [...projection.premiseIds].sort()))
+    throw new TypeError('complete received native conditional robust SignCell proof required');
+  const details=projection.context;
+  if(details.forecastId!==projection.cell.subject||
+    details.availableAt!==projection.at||
+    !instant(details.forecastAvailableAt)||
+    !instant(details.ambiguityObservedAt)||
+    !instant(details.ambiguityAvailableAt)||
+    Date.parse(details.forecastAvailableAt)>Date.parse(projection.at)||
+    Date.parse(details.ambiguityObservedAt)>Date.parse(details.ambiguityAvailableAt)||
+    Date.parse(details.ambiguityAvailableAt)>Date.parse(projection.at)||
+    details.assumedTotalVariationRadius!==
+      projection.evaluation.assumedTotalVariationRadius||
+    details.maximinAction!==projection.evaluation.maximinExpectedPayoffAction||
+    details.minimaxRegretAction!==projection.evaluation.minimaxRegretAction||
+    !same(details.robustValues,
+      [...projection.evaluation.actionEvaluations]
+        .sort((a,b)=>a.id.localeCompare(b.id))
+        .map(a=>[a.id,a.nominalExpectedUsd,a.worstCaseExpectedUsd,
+          a.bestCaseExpectedUsd,a.worstCaseRegretUsd])))
+    throw new TypeError('proof scope, evaluated joint values and source clocks disagree');
+
+  // The source/derived-model receipts are not signed by this library.
+  // Reject missing or ambiguous custody instead of laundering assumed
+  // evidence into a newly created SignCraft source revision.
+  const sources=projection.premiseIds.map(id=>{
+    const existing=historySection(history,id,'prediction-market-source-receipt');
+    if(existing.length!==1)
+      throw new RangeError('one pre-received source or model receipt required for every conditional premise');
+    const c=existing[0],o=c.object;
+    if(o?.kind!=='prediction-market-source-receipt-v1'||
+      !instant(o.observedAt)||!instant(o.availableAt)||
+      Date.parse(o.observedAt)>Date.parse(o.availableAt)||
+      Date.parse(o.availableAt)>Date.parse(projection.at)||
+      !digest(o.sha256))
+      throw new TypeError('preexisting source receipt is incomplete or later than inference');
+    return c;
+  });
+  const links=Object.freeze([...projection.premiseIds].sort()
+    .map(id=>cell(id,'is-premise-of-conditional-robust-action-evaluation',
+      projection.cell.subject,{
+        for:[{kind:'conditional-inference-causal-reference-v1',
+          rule:'finite-joint-total-variation-action-evaluation',
+          proofAddress:projection.address,premiseId:id}],
+      })));
+  const graph=relationGraphOfCells(links);
+  const priorHeads=historyHeads(history);
+  const already=originalCellAt(history,projection.cell);
+  const missingLinks=links.filter(c=>!originalCellAt(history,c));
+  if(already&&missingLinks.length)
+    throw new RangeError('existing conditional evaluation has missing causal predecessor links');
+  if(already)return Object.freeze({
+    kind:'conditional-robust-action-sign-history-v1',status:'already-recorded',
+    history,sourceCells:sources,linkCells:links,graph,
+    proofAddress:projection.address,proofRevisionId:null,
+    priorHeads,heads:priorHeads,tradeEligible:false,orderEffect:false,
+  });
+  const next=observeHistory(history,[...missingLinks,projection.cell],{
+    source:source+':conditional-inference',
+  });
+  const proofRevisionId=next.revisions.at(-1).id;
+  if(!same(next.revisions.at(-1).parents,priorHeads))
+    throw new Error('native SignCraft inference revision lost its source-receipt frontier');
+  for(const c of [...sources,...links,projection.cell])
+    if(!originalCellAt(next,c))
+      throw new Error('native SignCraft history lost a required proof or causal source');
+  return Object.freeze({
+    kind:'conditional-robust-action-sign-history-v1',status:'composed',
+    history:next,sourceCells:sources,linkCells:links,graph,
+    proofAddress:projection.address,proofRevisionId,
+    priorHeads,heads:historyHeads(next),
+    tradeEligible:false,orderEffect:false,
+  });
+}

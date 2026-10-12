@@ -1,0 +1,77 @@
+{
+  "forecast": {
+    "id": "synthetic-joined-kalshi-alpaca-gmx-scenarios",
+    "observedAt": "2026-10-12T18:00:00Z",
+    "availableAt": "2026-10-12T18:01:00Z",
+    "horizon": "2026-10-13T03:00:00Z",
+    "evidenceIds": [
+      "synthetic-scenario-model-only"
+    ],
+    "scenarios": [
+      {
+        "id": "risk-on",
+        "probability": 0.4
+      },
+      {
+        "id": "sideways",
+        "probability": 0.2
+      },
+      {
+        "id": "risk-off",
+        "probability": 0.4
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "abstain",
+      "payoffsUsdByScenario": {
+        "risk-on": 0,
+        "sideways": 0,
+        "risk-off": 0
+      }
+    },
+    {
+      "id": "alpaca-equity-exposure",
+      "payoffsUsdByScenario": {
+        "risk-on": 12,
+        "sideways": 1,
+        "risk-off": -8
+      }
+    },
+    {
+      "id": "kalshi-event-hedge",
+      "payoffsUsdByScenario": {
+        "risk-on": -3,
+        "sideways": 0,
+        "risk-off": 5
+      }
+    },
+    {
+      "id": "gmx-collateralized-hedge",
+      "payoffsUsdByScenario": {
+        "risk-on": -5,
+        "sideways": -2,
+        "risk-off": 9
+      }
+    },
+    {
+      "id": "cross-venue-package",
+      "payoffsUsdByScenario": {
+        "risk-on": 4,
+        "sideways": -1,
+        "risk-off": 2
+      }
+    }
+  ],
+  "ambiguity": {
+    "conditionedOnForecastId": "synthetic-joined-kalshi-alpaca-gmx-scenarios",
+    "observedAt": "2026-10-12T18:02:00Z",
+    "availableAt": "2026-10-12T18:03:00Z",
+    "evidenceIds": [
+      "synthetic-not-calibrated-total-variation-radius"
+    ],
+    "totalVariationRadius": 0.15
+  },
+  "at": "2026-10-12T20:00:00Z"
+}
