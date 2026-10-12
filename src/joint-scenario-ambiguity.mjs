@@ -44,26 +44,40 @@ const expected=(p,payoffs)=>sum(p.map((x,i)=>x*payoffs[i]));
  * in an invented empirical observation.
  */
 function extremize(p,payoffs,radius,minimize){
-  const q=p.slice(),indices=p.map((_,i)=>i);
+  const indices=p.map((_,i)=>i);
   const donors=[...indices].sort((a,b)=>
     (minimize?payoffs[b]-payoffs[a]:payoffs[a]-payoffs[b])||a-b);
   const recipients=[...indices].sort((a,b)=>
     (minimize?payoffs[a]-payoffs[b]:payoffs[b]-payoffs[a])||a-b);
+
+  // DO NOT mutate q[d] and q[r] at each transfer. When a high-payoff state
+  // has probability 1e-20 and the low-payoff recipient is already near 0.6,
+  // q[r]+1e-20 === q[r] in binary64. The previous loop interpreted that
+  // one unrepresentable addition as a reason to abandon ALL later donor
+  // states, producing a severely wrong robust financial value.
+  //
+  // Accumulate the transfer on separate, initially-zero in/out accounts.
+  // Even transfers too small to change a recipient's large base probability
+  // do not prevent the next, economically meaningful donor being processed.
+  // These are numerical ledgers over ONE simplex, not venue cash ledgers.
+  const inflow=p.map(()=>0),outflow=p.map(()=>0);
   let di=0,ri=0,remaining=radius;
   while(remaining>0&&di<indices.length&&ri<indices.length){
     const d=donors[di],r=recipients[ri];
     if(minimize?payoffs[d]<=payoffs[r]:payoffs[d]>=payoffs[r])break;
-    const amount=Math.min(remaining,q[d],1-q[r]);
-    if(amount>0){
-      const donorAfter=q[d]-amount,recipientAfter=q[r]+amount;
-      if(donorAfter===q[d]||recipientAfter===q[r])break;
-      q[d]=donorAfter;q[r]=recipientAfter;remaining-=amount;
-    }
-    if(q[d]<=0)di++;
-    if(q[r]>=1)ri++;
-    // This is only possible at floating-point resolution, not a new proof.
-    if(amount===0&&q[d]>0&&q[r]<1)break;
+    const available=p[d]-outflow[d];
+    const capacity=(1-p[r])-inflow[r];
+    if(available<=0){di++;continue;}
+    if(capacity<=0){ri++;continue;}
+    const amount=Math.min(remaining,available,capacity);
+    if(amount<=0)break;
+    outflow[d]+=amount;
+    inflow[r]+=amount;
+    remaining-=amount;
+    if(outflow[d]>=p[d])di++;
+    if(inflow[r]>=1-p[r])ri++;
   }
+  const q=p.map((probability,i)=>probability+inflow[i]-outflow[i]);
   return {
     expectedUsd:expected(q,payoffs),
     probabilities:q,

@@ -118,3 +118,78 @@ test('a state with zero prior weight can be inside the assumed ambiguity ball',(
   assert.deepEqual(action(r,'alpaca-long').worstCaseScenarioProbabilities,
     [['up',.8],['down',.2]]);
 });
+
+
+test('vanishing high-payoff donor cannot abort later large adverse mass transfers',()=>{
+  // A floating addition of 1e-20 to the 0.6 recipient rounds to 0.6.
+  // The former extremizer stopped at that unrepresentable microtransfer,
+  // leaving the 0.4-probability high-payoff world untouched.
+  const f={...forecast(),scenarios:[
+    {id:'low',probability:0.6},
+    {id:'dust-high',probability:1e-20},
+    {id:'high',probability:0.4},
+  ]};
+  const menu=[
+    {id:'abstain',payoffsUsdByScenario:{low:0,'dust-high':0,high:0}},
+    {id:'joint-risk',payoffsUsdByScenario:{low:-10,'dust-high':100,high:10}},
+  ];
+  const r=evaluate({
+    forecast:f,actions:menu,
+    ambiguity:{...ambiguity(),totalVariationRadius:.35},
+  });
+  const a=action(r,'joint-risk');
+  near(a.nominalExpectedUsd,-2);
+  near(a.worstCaseExpectedUsd,-9);
+  near(a.bestCaseExpectedUsd,36.5);
+  near(a.worstCaseUsedTotalVariation,.35);
+  assert.ok(a.worstCaseScenarioProbabilities.every(([,q])=>q>=0&&q<=1));
+  near(a.worstCaseScenarioProbabilities.reduce((n,[,q])=>n+q,0),1);
+  assert.equal(r.tradeEligible,false);
+});
+
+test('vanishing low-payoff donor also cannot suppress a maximum payoff bound',()=>{
+  const f={...forecast(),scenarios:[
+    {id:'high',probability:0.4},
+    {id:'dust-low',probability:1e-20},
+    {id:'low',probability:0.6},
+  ]};
+  const menu=[
+    {id:'abstain',payoffsUsdByScenario:{high:0,'dust-low':0,low:0}},
+    {id:'joint-risk',payoffsUsdByScenario:{high:10,'dust-low':-100,low:-10}},
+  ];
+  const r=evaluate({
+    forecast:f,actions:menu,
+    ambiguity:{...ambiguity(),totalVariationRadius:.25},
+  });
+  const a=action(r,'joint-risk');
+  near(a.nominalExpectedUsd,-2);
+  near(a.bestCaseExpectedUsd,3);
+  near(a.bestCaseUsedTotalVariation,.25);
+  near(a.bestCaseScenarioProbabilities.reduce((n,[,q])=>n+q,0),1);
+});
+
+test('greedy TV extremal values are monotonic in the ambiguity radius',()=>{
+  const f={...forecast(),scenarios:[
+    {id:'severe',probability:.15},
+    {id:'neutral',probability:.65},
+    {id:'good',probability:.2},
+  ]};
+  const menu=[
+    {id:'abstain',payoffsUsdByScenario:{severe:0,neutral:0,good:0}},
+    {id:'package',payoffsUsdByScenario:{severe:-8,neutral:1,good:12}},
+  ];
+  let previousWorst=Infinity,previousBest=-Infinity;
+  for(const radius of [0,.01,.1,.3,.7,1]){
+    const r=evaluate({
+      forecast:f,actions:menu,
+      ambiguity:{...ambiguity(),totalVariationRadius:radius},
+    });
+    const a=action(r,'package');
+    assert.ok(a.worstCaseExpectedUsd<=previousWorst+1e-10);
+    assert.ok(a.bestCaseExpectedUsd>=previousBest-1e-10);
+    assert.ok(a.worstCaseUsedTotalVariation<=radius+1e-10);
+    assert.ok(a.bestCaseUsedTotalVariation<=radius+1e-10);
+    previousWorst=a.worstCaseExpectedUsd;
+    previousBest=a.bestCaseExpectedUsd;
+  }
+});
