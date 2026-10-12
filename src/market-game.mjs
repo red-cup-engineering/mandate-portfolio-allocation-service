@@ -6,6 +6,7 @@ import { gameRules, hashPosition } from '@red-cup-engineering/gaming/running/rul
 import { jointKellyForScenarioReturns } from '@red-cup-engineering/position-sizing-service';
 import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 import {assessExecutableBook} from './executable-book.mjs';
+import { principalVenueKey, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -30,14 +31,14 @@ function extend(state, move) {
     }
     case 'account': {
       const row = move.account; venue(row.venue); time(row.observedAt);
-      if (row.principal !== undefined) name(row.principal);
+      name(row.principal);
       money(row.equityCents); money(row.freeCashCents); money(row.reservedCents ?? 0);
       if (row.freeCashCents > row.equityCents) throw new RangeError('deployable cash exceeds equity; borrowing is not equity');
       for (const [instrument, holding] of Object.entries(row.inventory ?? {})) {
         name(instrument); nonnegative(holding.units, 'held inventory units'); nonnegative(holding.availableUnits, 'available inventory units');
         if (!(finite(holding.markPrice, 'inventory mark') > 0) || holding.availableUnits > holding.units) throw new RangeError('inventory availability or mark invalid');
       }
-      next = { ...state, accounts: put(state.accounts, row.venue, row) }; break;
+      next = { ...state, accounts: put(state.accounts, principalVenueKey(row), row) }; break;
     }
     case 'quote': {
       const row = move.quote; name(row.id); venue(row.venue); name(row.instrument); time(row.observedAt);
@@ -69,7 +70,7 @@ function extend(state, move) {
       const row = move.forecast; name(row.id); time(row.observedAt); time(row.horizon);
       if (!Array.isArray(row.scenarios) || row.scenarios.length < 2 || row.scenarios.length > 512) throw new TypeError('2..512 shared scenarios required');
       if (new Set(row.scenarios.map((s) => name(s.id))).size !== row.scenarios.length) throw new TypeError('unique scenario IDs required');
-      let mass = 0; for (const s of row.scenarios) { mass += nonnegative(s.probability, 'scenario probability'); if (!s.values || !s.heldPnlCentsByVenue) throw new TypeError('scenario values and existing holdings P&L required'); }
+      let mass = 0; for (const s of row.scenarios) { mass += nonnegative(s.probability, 'scenario probability'); if (!s.values || (!s.heldPnlCentsByVenue && !s.heldPnlCentsByPrincipalVenue)) throw new TypeError('scenario values and existing holdings P&L required'); }
       if (Math.abs(mass - 1) > 1e-9) throw new RangeError('scenario probabilities must sum to one');
       if (!Array.isArray(row.evidenceIds) || !row.evidenceIds.length) throw new TypeError('forecast evidence required');
       next = { ...state, forecast: newer(state.forecast, row) ? row : state.forecast }; break;
@@ -285,17 +286,18 @@ export function planMarket(state, policy, at) {
   const accounts = Object.values(state.accounts).sort((a, b) => a.venue.localeCompare(b.venue));
   if (!accounts.length || accounts.some((a) => !fresh(a))) throw new RangeError('fresh account readings required');
   const principal = name(policy.principal);
-  if (accounts.some(account => account.principal !== principal)) throw new TypeError('funded accounts must belong to the declared decision principal');
+  const accountByVenue = indexPrincipalAccounts(state.accounts, principal);
   const equity = accounts.reduce((s, a) => s + a.equityCents, 0); if (equity <= 0) throw new RangeError('positive portfolio equity required');
-  const baseline = f.scenarios.map((s) => 1 + accounts.reduce((pnl, a) => pnl + finite(s.heldPnlCentsByVenue[a.venue], `held P&L ${a.venue}`), 0) / equity);
+  const baseline = f.scenarios.map((s) => 1 + accounts.reduce((pnl, a) => pnl + scenarioHeldPnLCents(s, principal, a.venue), 0) / equity);
   const skips = [], candidates = [], seen = new Set();
   for (const strategy of Object.values(state.strategies).sort((a, b) => a.id.localeCompare(b.id))) {
     for (const id of strategy.quoteIds) {
       const q = state.quotes[id];
       const refuse = (reason) => skips.push({ strategy: strategy.id, id, reason });
+      if (time(strategy.observedAt) > now) { refuse('strategy proposed after decision time'); continue; }
       if (strategy.falsifierFired) { refuse('strategy falsified'); continue; }
       if (!evidenceOK(strategy.evidenceIds)) { refuse('future or missing strategy evidence'); continue; }
-      if (!fresh(q) || !state.accounts[q?.venue]) { refuse('quote/account absent or stale'); continue; }
+      if (!fresh(q) || !accountByVenue.has(q?.venue)) { refuse('quote/account absent or stale'); continue; }
       if (time(q.horizon) !== time(f.horizon)) { refuse('payoff horizon differs from the common scenarios'); continue; }
       if (!payoffScopes.some(scope=>holdingPeriodMs>=scope.minHoldingPeriodMs&&holdingPeriodMs<=scope.maxHoldingPeriodMs&&hashPosition(scope.target)===hashPosition(payoffTarget(q)))) { refuse('candidate differs from the scored payoff scope or holding period'); continue; }
       if (q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
@@ -338,7 +340,7 @@ export function planMarket(state, policy, at) {
       }
       if (q.venue === 'evm' && q.carrier === 'collateral' && (!(q.leverage > 0) || !Number.isFinite(q.leverage) || !q.collateralToken)) { refuse('collateral payoff requires leverage and token identity'); continue; }
       if (q.funding && q.venue !== 'evm') throw new TypeError('inventory exchanges require an EVM venue consumer');
-      const holding = q.funding && state.accounts[q.venue].inventory?.[q.funding.instrument];
+      const holding = q.funding && accountByVenue.get(q.venue).inventory?.[q.funding.instrument];
       if (q.funding && (!holding || !(holding.availableUnits > 0))) { refuse('funding inventory absent or unavailable'); continue; }
       if (q.funding && Math.abs(q.funding.unitsPerUnit * holding.markPrice - q.entryPrice) > 1e-9 * Math.max(1, q.entryPrice)) throw new RangeError('funding inventory mark differs from entry value');
       let lossRate = null;
@@ -427,6 +429,13 @@ export function planFleet(state, policies, at) {
     if (!principals.includes(principal) || byPrincipal.has(principal)) throw new TypeError('unique observed fleet principal policies required');
     byPrincipal.set(principal, policy);
   }
+  // A single venue's holdings P&L cannot be credited to multiple principals.
+  // Require principal-specific scenario valuations wherever venue ownership overlaps.
+  const sharedVenues = sharedPrincipalVenues(state.accounts);
+  for (const scenario of state.forecast?.scenarios ?? [])
+    for (const account of accounts)
+      if (sharedVenues.has(account.venue))
+        scenarioHeldPnLCents(scenario, account.principal, account.venue, { requireScoped: true });
   const fleetPosition = hashPosition(state);
   return principals.map(principal => {
     const ownAccounts = accounts.filter(account => account.principal === principal), venues = new Set(ownAccounts.map(account => account.venue));
@@ -434,7 +443,7 @@ export function planFleet(state, policies, at) {
     const strategies = Object.fromEntries(Object.entries(state.strategies).map(([id,strategy]) => [id,{...strategy,quoteIds:strategy.quoteIds.filter(id => Object.hasOwn(quotes,id))}]).filter(([,strategy]) => strategy.quoteIds.length));
     const decisions = Object.fromEntries(Object.entries(state.decisions).filter(([,decision]) => decision.principal === principal));
     const outcomes = Object.fromEntries(Object.entries(state.outcomes).filter(([,outcome]) => Object.hasOwn(decisions,outcome.decisionId)));
-    const position = {...state,accounts:Object.fromEntries(ownAccounts.map(account => [account.venue,account])),quotes,strategies,decisions,outcomes};
+    const position = {...state,accounts:Object.fromEntries(ownAccounts.map(account => [principalVenueKey(account),account])),quotes,strategies,decisions,outcomes};
     const {id,...body} = planMarket(position, byPrincipal.get(principal), at);
     const decision = {...body,fleetPosition};
     return {id:hashPosition(decision),...decision};

@@ -71,7 +71,7 @@ test('shared research cannot combine different principals or consume their alloc
 test('Alpaca intent formation and live execution reject another principal before venue placement',()=>{
  const decision=planMarket(state(),policy,at);
  const contract={type:'PrincipalBrokerageServiceContract',id:'test-contract',principal:'another-principal',scopes:['orders:intent','orders:live'],validUntil:horizon,risk:{maximumOrderNotional:10,maximumLossAmount:10,concentrationLimit:1},capital:{amount:10,currency:'USD'}};
- assert.throws(()=>formAggressivePortfolioIntent({contract,evidencePackets:[{type:'IssuerEvidencePacket',id:'test-only'}],symbol:'TEST',notional:1,maximumLoss:1,marketDecision:decision,asOf:at}),/another principal/);
+ assert.throws(()=>formAggressivePortfolioIntent({contract,evidencePackets:[{type:'IssuerEvidencePacket',id:'test-only',ticker:'TEST'}],symbol:'TEST',notional:1,maximumLoss:1,marketDecision:decision,asOf:at}),/another principal/);
  const authorityGrant={type:'RevocableBrokerageAuthorityGrant',revoked:false,scopes:['orders:live'],principalContract:contract.id,validUntil:horizon};
  const intent={type:'AggressiveBrokerageOrderIntent',contract:contract.id,side:'buy',symbol:'TEST',notional:1,maximumLoss:1,marketDecision:decision};
  assert.throws(()=>validateExecutionRequest({contract,authorityGrant,intent,now:at}),/another principal/);
@@ -165,4 +165,36 @@ test('current pinned EVM state can be planned without claiming finality; stale f
   }
  }
  const malformed=state();malformed.quotes.swap.blockHash='0xblock';assert.equal(planMarket(malformed,policy,at).orders.length,0);
+});
+
+test('one venue retains two principals and demands independently valued held inventory',()=>{
+ const first=state().accounts.evm;
+ const second={venue:'evm',principal:personalPolicy.principal,observedAt:at,equityCents:500,freeCashCents:0,inventory:{}};
+ const afterFirst=marketGame.extend(marketGame.initialPosition(),{kind:'account',account:first}).state;
+ const afterBoth=marketGame.extend(afterFirst,{kind:'account',account:second}).state;
+ assert.equal(Object.values(afterBoth.accounts).length,2);
+ assert.deepEqual(new Set(Object.values(afterBoth.accounts).map(a=>a.principal)),new Set([policy.principal,personalPolicy.principal]));
+ const s=mixedFleet();
+ s.accounts.otherEvm=second;
+ assert.throws(()=>planFleet(s,[policy,personalPolicy],at),/shared venue requires principal-scoped held P&L/);
+ for(const scenario of s.forecast.scenarios){
+  scenario.heldPnlCentsByPrincipalVenue={
+   [policy.principal]:{evm:scenario.heldPnlCentsByVenue.evm},
+   [personalPolicy.principal]:{evm:0},
+  };
+ }
+ const baseline=planFleet(mixedFleet(),[policy,personalPolicy],at);
+ const fleet=planFleet(s,[policy,personalPolicy],at);
+ const group=fleet.find(d=>d.principal===policy.principal);
+ const personal=fleet.find(d=>d.principal===personalPolicy.principal);
+ assert.equal(group.equityCents,100);
+ assert.equal(personal.equityCents,1000);
+ assert.deepEqual(group.orders,baseline.find(d=>d.principal===policy.principal).orders);
+ assert.equal(group.fleetPosition,personal.fleetPosition);
+});
+test('no future-authored strategy can claim a presently executable quote',()=>{
+ const s=state();s.strategies.hedge.observedAt=horizon;
+ const result=planMarket(s,policy,at);
+ assert.equal(result.orders.length,0);
+ assert.ok(result.skips.some(skip=>/strategy proposed after decision time/.test(skip.reason)));
 });
