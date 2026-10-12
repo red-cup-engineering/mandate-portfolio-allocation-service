@@ -200,3 +200,130 @@ export function compareMarketResearchAcquisitions({
     ]),
   });
 }
+
+/**
+ * Actually condition an EXISTING joint scenario law on one newly received
+ * observation, after the EVSI research/acquisition decision.
+ *
+ * This closes the loop that EVSI alone cannot: a signal has arrived, so each
+ * scenario's weight must now be updated via Bayes, and ALL contracts consuming
+ * that scenario law must update together. It is not valid to edit an isolated
+ * market's YES probability independently of the others.
+ *
+ * The signal kernel must be expressly conditional on this exact prior
+ * forecast ID. Reusing an old unconditional likelihood after previous evidence
+ * has already been included would silently count correlated information twice.
+ *
+ * A prior and a received likelihood form a research posterior, NOT source
+ * authentication, a SignCell proof of settlement, or authority to order.
+ */
+export function conditionMarketForecastOnSignal({
+  forecast, signalModel, observation, at, actions = null,
+} = {}) {
+  const absolute = s => typeof s === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(s) &&
+    Number.isFinite(Date.parse(s));
+  if (!absolute(at) || !observation || !identity(observation.id) ||
+      !identity(observation.signalId) || !absolute(observation.observedAt) ||
+      !absolute(observation.availableAt) ||
+      !Array.isArray(observation.evidenceIds) ||
+      !observation.evidenceIds.length ||
+      observation.evidenceIds.some(id => !identity(id)) ||
+      !forecast || !signalModel ||
+      signalModel.conditionedOnForecastId !== forecast.id ||
+      !absolute(forecast.observedAt) ||
+      (forecast.availableAt !== undefined && !absolute(forecast.availableAt)) ||
+      !absolute(signalModel.availableAt) ||
+      !absolute(forecast.horizon) ||
+      Date.parse(signalModel.availableAt) > Date.parse(observation.observedAt) ||
+      Date.parse(forecast.availableAt ?? forecast.observedAt) > Date.parse(observation.observedAt) ||
+      Date.parse(forecast.observedAt) > Date.parse(observation.observedAt) ||
+      Date.parse(observation.observedAt) > Date.parse(observation.availableAt) ||
+      Date.parse(observation.availableAt) > Date.parse(at) ||
+      Date.parse(at) >= Date.parse(forecast.horizon))
+    throw new TypeError('precommitted conditional signal, ordered actual receipt and live forecast horizon required');
+
+  const receiptIds = [...observation.evidenceIds];
+  if (new Set(receiptIds).size !== receiptIds.length)
+    throw new TypeError('duplicate observation evidence ID');
+  const selected = signalModel.signals?.find(s => s.id === observation.signalId);
+  if (!selected)
+    throw new TypeError('observed signal must belong to the frozen emission model');
+
+  // Reuse the established joint scenario, emission, action and abstention
+  // validators. The action menu is optional; absent a menu we supply only
+  // zero-payoff abstention for admission, not a simulated financial strategy.
+  const admittedActions = actions ?? [{
+    id: 'abstain',
+    payoffsUsdByScenario: Object.fromEntries(
+      (forecast.scenarios ?? []).map(s => [s.id, 0])),
+  }];
+  const assessment = evaluateMarketInformationValue({
+    forecast, actions: admittedActions, signalModel, at,
+  });
+  const source = assessment.signals.find(s => s.signal === observation.signalId);
+
+  // Log-sum-exp prevents a very rare but possible signal from numerically
+  // disappearing when valid positive input probabilities are tiny.
+  const logs = forecast.scenarios.map(s => {
+    const likelihood = selected.likelihoodByScenario[s.id];
+    return s.probability > 0 && likelihood > 0 ?
+      Math.log(s.probability) + Math.log(likelihood) : -Infinity;
+  });
+  const peak = Math.max(...logs);
+  if (peak === -Infinity) {
+    return {
+      kind: 'joint-market-scenario-signal-conditioning-v1',
+      status: 'observation-impossible-under-frozen-model',
+      at, priorForecastId: forecast.id, signalModelId: signalModel.id,
+      observationId: observation.id, signalId: observation.signalId,
+      forecast: null, conditionalAction: null, sourceAuthenticated: false,
+      tradeEligible: false, orderEffect: false,
+    };
+  }
+  const scaled = logs.map(l => l === -Infinity ? 0 : Math.exp(l - peak));
+  const denominator = scaled.reduce((sum, x) => sum + x, 0);
+  const posteriorMass = scaled.map(x => x / denominator);
+  const logLikelihood = peak + Math.log(denominator);
+  const posterior = {
+    ...forecast,
+    // This JSON tuple is a collision-free lineage label among distinct ID
+    // tuples, not a SignCell address or verified digest of original source.
+    id: JSON.stringify(['conditioned-joint-forecast',
+      forecast.id, signalModel.id, observation.id, observation.signalId]),
+    observedAt: observation.observedAt,
+    availableAt: observation.availableAt,
+    evidenceIds: [...new Set([
+      ...forecast.evidenceIds, ...signalModel.sourceEvidenceIds,
+      ...observation.evidenceIds,
+    ])].sort(),
+    scenarios: forecast.scenarios.map((s, i) => ({
+      ...s, probability: posteriorMass[i],
+    })),
+  };
+  const divergenceNats = posteriorMass.reduce((sum, q, i) => q === 0 ? sum :
+    sum + q * Math.log(q / forecast.scenarios[i].probability), 0);
+  return {
+    kind: 'joint-market-scenario-signal-conditioning-v1',
+    status: 'conditional-research-posterior',
+    at, priorForecastId: forecast.id, signalModelId: signalModel.id,
+    observationId: observation.id, signalId: observation.signalId,
+    logObservationLikelihood: logLikelihood,
+    observationProbability: Math.exp(logLikelihood),
+    realizedSurprisalBits: -logLikelihood / Math.LN2,
+    posteriorPriorDivergenceNats: Math.max(0, divergenceNats),
+    forecast: posterior,
+    conditionalAction: actions === null ? null : {
+      priorBestAction: assessment.baseBestAction,
+      posteriorBestAction: source.bestAction,
+      posteriorExpectedUsd: source.conditionalExpectedUsd,
+      actionMenuFixed: true,
+    },
+    limitations: [
+      'Bayes assumes the frozen signal likelihood is calibrated conditional on the specified prior forecast',
+      'the observed receipt and model are supplied, not independently authenticated by this mathematical operator',
+      'joint scenario probabilities are updated together; the result is not a fresh market book, fee or fill forecast',
+    ],
+    sourceAuthenticated: false, tradeEligible: false, orderEffect: false,
+  };
+}
