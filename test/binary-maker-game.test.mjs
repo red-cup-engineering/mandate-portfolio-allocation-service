@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {binaryMakerPlacementBounds,rankBinaryMakerPlacements} from '../src/binary-maker-game.mjs';
+import {binaryMakerPlacementBounds,rankBinaryMakerPlacements,binaryMakerOutcomeConditionedBounds} from '../src/binary-maker-game.mjs';
 
 const band=(x,y=x)=>({low:x,high:y});
 const maker=(overrides={})=>({
@@ -114,4 +114,103 @@ test('narrowing a valid interval cannot widen sharp payoff bounds',()=>{
  const narrow=binaryMakerPlacementBounds(maker({probabilityYes:band(.9,.95),probabilityFill:band(.15,.3)}));
  assert.ok(narrow.conditionalPnlUsdPerPlacement.low>=broad.conditionalPnlUsdPerPlacement.low-1e-10);
  assert.ok(narrow.conditionalPnlUsdPerPlacement.high<=broad.conditionalPnlUsdPerPlacement.high+1e-10);
+});
+
+
+const conditioned=(more={})=>({
+  side:'yes',priceUsd:.96,makerFeeUsdPerFill:.002,
+  probabilityYes:band(.95),
+  probabilityFillGivenWin:band(.20),
+  probabilityFillGivenLoss:band(.30),...more,
+});
+
+test('outcome-conditioned maker rate explicitly penalizes more fills when our quote loses',()=>{
+ const v=binaryMakerOutcomeConditionedBounds(conditioned());
+ const jointWin=.95*.20,jointLose=.05*.30;
+ near(v.probabilityFill.low,jointWin+jointLose);
+ near(v.conditionalPnlUsdPerPlacement.low,jointWin-.962*(jointWin+jointLose));
+ near(v.conditionalPnlUsdPerPlacement.high,v.conditionalPnlUsdPerPlacement.low);
+ assert.ok(v.probabilityFillGivenLoss.low>v.probabilityFillGivenWin.low);
+ assert.equal(v.tradeEligible,false);
+});
+
+test('the same purchased NO side is the exact win/loss order dual',()=>{
+ const yes=binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityYes:band(.95),
+ }));
+ const no=binaryMakerOutcomeConditionedBounds(conditioned({
+   side:'no',probabilityYes:band(.05),
+ }));
+ near(yes.conditionalPnlUsdPerPlacement.low,no.conditionalPnlUsdPerPlacement.low);
+ near(yes.probabilityFill.low,no.probabilityFill.low);
+});
+
+test('explicit fill-winner dependence gives a narrower answer than free Frechet coupling',()=>{
+ const v=binaryMakerOutcomeConditionedBounds(conditioned());
+ const b=binaryMakerPlacementBounds(maker({
+  probabilityYes:band(.95),probabilityFill:v.probabilityFill,
+ }));
+ assert.ok(v.conditionalPnlUsdPerPlacement.low>b.conditionalPnlUsdPerPlacement.low);
+ assert.ok(v.conditionalPnlUsdPerPlacement.high<b.conditionalPnlUsdPerPlacement.high);
+ assert.equal(v.probabilityWin.low,.95);
+});
+
+test('conditional outcome rate box bounds all interior choices in a fine finite grid',()=>{
+ let cases=0;
+ for(const p of [0,.25,.75,1])for(const alpha of [0,.2,.8,1])
+ for(const beta of [0,.25,.5,1]){
+  const v=binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityYes:band(p,p+.001*(1-p)),
+   probabilityFillGivenWin:band(alpha,Math.min(1,alpha+.12)),
+   probabilityFillGivenLoss:band(beta,Math.min(1,beta+.16)),
+  }));
+  const pw=(p+v.probabilityWin.high)/2;
+  const q1=(alpha+Math.min(1,alpha+.12))/2;
+  const q0=(beta+Math.min(1,beta+.16))/2;
+  const winJoint=pw*q1;
+  const fill=winJoint+(1-pw)*q0;
+  const ev=winJoint-.962*fill;
+  assert.ok(ev>=v.conditionalPnlUsdPerPlacement.low-1e-10);
+  assert.ok(ev<=v.conditionalPnlUsdPerPlacement.high+1e-10);
+  cases++;
+ }
+ assert.ok(cases>=64);
+});
+
+test('bounds widen, never shrink, when qualified hazards become less precise',()=>{
+ const narrow=binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityYes:band(.94,.96),probabilityFillGivenWin:band(.18,.22),
+   probabilityFillGivenLoss:band(.28,.32),
+ }));
+ const broad=binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityYes:band(.90,1),probabilityFillGivenWin:band(.12,.33),
+   probabilityFillGivenLoss:band(.20,.48),
+ }));
+ assert.ok(broad.conditionalPnlUsdPerPlacement.low<=narrow.conditionalPnlUsdPerPlacement.low+1e-12);
+ assert.ok(broad.conditionalPnlUsdPerPlacement.high>=narrow.conditionalPnlUsdPerPlacement.high-1e-12);
+});
+
+test('earnings scenarios are additive assumptions and cannot create execution authority',()=>{
+ const a=binaryMakerOutcomeConditionedBounds(conditioned());
+ const b=binaryMakerOutcomeConditionedBounds(conditioned({
+   incentiveUsdPerPlacement:band(.01,.03),carryUsdPerPlacement:.004,
+ }));
+ near(b.conditionalPnlUsdPerPlacement.low-a.conditionalPnlUsdPerPlacement.low,.006);
+ near(b.conditionalPnlUsdPerPlacement.high-a.conditionalPnlUsdPerPlacement.high,.026);
+ assert.equal(b.tradeEligible,false);
+});
+
+test('unknown or inconsistent future-conditioned probabilities fail closed',()=>{
+ assert.throws(()=>binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityFillGivenLoss:null,
+ })),TypeError);
+ assert.throws(()=>binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityFillGivenWin:band(-.01,.2),
+ })),TypeError);
+ assert.throws(()=>binaryMakerOutcomeConditionedBounds(conditioned({
+   probabilityYes:band(.1,1.1),
+ })),TypeError);
+ assert.throws(()=>binaryMakerOutcomeConditionedBounds(conditioned({
+   carryUsdPerPlacement:-1,
+ })),TypeError);
 });
