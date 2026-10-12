@@ -253,7 +253,7 @@ export function scoreBinaryOutcomeFillHoldout({
     id:studyId,trainingId:training.id,holdoutReceiptId:validated.id,
     familyScope:training.familyScope,quoteRegime:training.quoteRegime,
     side:training.side,trainedAvailableAt:training.availableAt,
-    evaluatedAt,latestTrainingDate,
+    evaluatedAt,latestTrainingDate,alpha,minEvaluationDays,
     independentHeldoutDays:days,actualHeldoutOrderCount:rows.length,
     trainingUnconditionalFillProbability:baseline,
     trainingFillGivenWin:means.win.mean,trainingFillGivenLoss:means.loss.mean,
@@ -312,6 +312,54 @@ export function bindScreenedOutcomeFillResearch({
     training.admitted!==false||holdout.admitted!==false||
     training.tradeEligible!==false||holdout.tradeEligible!==false)
   throw new TypeError('matching and timely frozen training/held-out source receipts required');
+ // Re-derive reported score and confidence bound before letting any consumer
+ // read them as evidence. This checks arithmetical/internal consistency;
+ // independently authenticated exchange receipts remain an external duty.
+ if(!Number.isSafeInteger(holdout.independentHeldoutDays)||
+    holdout.independentHeldoutDays<1||
+    !Number.isSafeInteger(holdout.minEvaluationDays)||
+    holdout.minEvaluationDays<10||
+    !finite(holdout.alpha)||holdout.alpha<=0||holdout.alpha>=.5||
+    !Array.isArray(holdout.perDay)||
+    holdout.perDay.length!==holdout.independentHeldoutDays||
+    !Number.isSafeInteger(holdout.actualHeldoutOrderCount)||
+    holdout.actualHeldoutOrderCount<holdout.independentHeldoutDays)
+  throw new TypeError('complete and independently counted holdout day/uncertainty receipt required');
+ const latestTrainDate=[...training.dayStatistics].map(r=>r.date).sort(cmp).at(-1);
+ if(holdout.latestTrainingDate!==latestTrainDate)throw new RangeError('training/holdout day boundaries disagree');
+ const expectedId=hashPosition({kind:'outcome-fill-holdout-brier-v1',
+   trainingId:training.id,evaluationId:holdout.holdoutReceiptId,
+   evaluatedAt:holdout.evaluatedAt,minEvaluationDays:holdout.minEvaluationDays,
+   alpha:holdout.alpha});
+ if(expectedId!==holdout.id)throw new RangeError('holdout report identity disagrees with its own source metadata');
+ const daysSeen=new Set();
+ let cond=0,base=0,count=0;
+ for(const row of holdout.perDay){
+  if(!day(row?.date)||daysSeen.has(row.date)||row.date<=latestTrainDate||
+     !Number.isSafeInteger(row.attempts)||row.attempts<1||
+     !Number.isSafeInteger(row.fills)||row.fills<0||row.fills>row.attempts||
+     !finite(row.conditionalBrier)||!finite(row.baselineBrier)||
+     !finite(row.pairedImprovement)||
+     row.conditionalBrier<0||row.conditionalBrier>1||
+     row.baselineBrier<0||row.baselineBrier>1||
+     Math.abs(row.pairedImprovement-(row.baselineBrier-row.conditionalBrier))>1e-9)
+   throw new TypeError('missing, duplicate, impossible or temporally overlapping holdout day');
+  daysSeen.add(row.date);count+=row.attempts;
+  cond+=row.conditionalBrier;base+=row.baselineBrier;
+ }
+ const d=holdout.independentHeldoutDays,radius=Math.sqrt(2*Math.log(1/holdout.alpha)/d);
+ const condB=cond/d,baseB=base/d,gain=baseB-condB,lower=gain-radius;
+ const stated=holdout.holdoutBrier;
+ if(count!==holdout.actualHeldoutOrderCount||!stated||
+    ![stated.outcomeConditioned,stated.unconditional,stated.pairedImprovement,
+       stated.exploratoryRadius,stated.exploratoryOneSidedLowerBound].every(finite)||
+    Math.abs(stated.outcomeConditioned-condB)>1e-9||
+    Math.abs(stated.unconditional-baseB)>1e-9||
+    Math.abs(stated.pairedImprovement-gain)>1e-9||
+    Math.abs(stated.exploratoryRadius-radius)>1e-9||
+    Math.abs(stated.exploratoryOneSidedLowerBound-lower)>1e-9||
+    holdout.conditionallyImproved!==(d>=holdout.minEvaluationDays&&lower>0))
+  throw new RangeError('holdout Brier or confidence witness differs from its actual day rows');
  const p=training.modelCandidate;
  const evidence={
   kind:'screened-day-block-fill-research-v1',
