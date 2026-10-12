@@ -104,3 +104,27 @@ test('malformed or duplicated witness IDs, clocks and contexts fail closed',()=>
 test('unsupported temperature intervals cannot be smuggled through as a sign',()=>{
  assert.throws(()=>run([{...p('bad',4,Infinity),lower:Infinity,upper:-Infinity}]),TypeError);
 });
+
+
+test('source population day and hypothesis assumption cannot be silently omitted from SignCell context',()=>{
+ assert.throws(()=>run([], {context:{...context(),targetDate:undefined}}),TypeError);
+ assert.throws(()=>run([], {context:{...context(),targetDate:'2026-02-30'}}),TypeError);
+ assert.throws(()=>run([], {context:{...context(),assumption:undefined}}),TypeError);
+ assert.throws(()=>run([], {context:{...context(),assumption:''}}),TypeError);
+});
+
+test('knowledge carrier records the exact independent premises used by every support/refutation witness',()=>{
+ const r=run([p('older',4.10,Infinity),p('contradiction',-Infinity,3.9)]);
+ assert.equal(r.contradictory,true);
+ assert.deepEqual(r.premiseIds,['contradiction','older']);
+ const ids=new Set(r.premiseIds);
+ assert.ok(r.sourceRelations.length===r.cell.for.length+r.cell.against.length);
+ for(const edge of r.sourceRelations){
+  assert.ok(['for','against'].includes(edge.side));
+  assert.ok(edge.premises.length>=1);
+  assert.ok(edge.premises.every(x=>ids.has(x)));
+  assert.ok(r.cell[edge.side].some(w=>w.rule===edge.rule &&
+   JSON.stringify(w.premises)===JSON.stringify(edge.premises)));
+ }
+ assert.equal(r.tradeEligible,false);
+});
