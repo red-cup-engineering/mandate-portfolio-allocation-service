@@ -133,3 +133,70 @@ export function evaluateMarketInformationValue({
   tradeEligible:false,orderEffect:false,
  };
 }
+
+/**
+ * Compare bounded research purchases on the SAME joint market game.
+ *
+ * This is a menu over the existing EVSI operator, not a second forecast
+ * family. Candidate signals can be SEC disclosure interpretation, Koios
+ * provenance analysis, options implied distributions, order-flow observations,
+ * or another learned information source. Each must supply its own pre-decision
+ * joint scenario likelihood; vague sentiment labels are not calibrated
+ * signal models. Correlated offers are evaluated ALTERNATIVELY, never added.
+ *
+ * A missing or inadmissible kernel is an explicit research-evidence gap rather
+ * than a zero-valued signal. No inference job or brokerage operation runs.
+ */
+export function compareMarketResearchAcquisitions({
+  forecast, actions, at, candidates = [],
+} = {}) {
+  if (!Array.isArray(candidates) || candidates.length < 1 || candidates.length > 64)
+    throw new TypeError('bounded-research-acquisition-candidates-required');
+  const names = new Set(), scored = [], gaps = [];
+  for (const candidate of candidates) {
+    if (!identity(candidate?.id) || names.has(candidate.id))
+      throw new TypeError('unique-research-acquisition-identity-required');
+    names.add(candidate.id);
+    try {
+      const assessment = evaluateMarketInformationValue({
+        forecast, actions, at, signalModel: candidate.signalModel,
+        computeCostUsd: candidate.computeCostUsd ?? 0,
+        repricingCostBoundUsd: candidate.repricingCostBoundUsd ?? 0,
+      });
+      scored.push({
+        id: candidate.id,
+        signalModelId: assessment.signalModelId,
+        grossEvsiUsd: assessment.grossEvsiUsd,
+        netEvsiUsd: assessment.netEvsiUsd,
+        computeCostUsd: assessment.computeCostUsd,
+        repricingCostBoundUsd: assessment.repricingCostBoundUsd,
+        baseBestAction: assessment.baseBestAction,
+        shouldAcquireConditional: assessment.shouldAcquireConditional,
+        // A conditional positive EVSI is not evidence of live profitability.
+        tradeEligible: false,
+      });
+    } catch (error) {
+      gaps.push({
+        id: candidate.id,
+        disposition: 'unranked-without-admissible-signal-model',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  scored.sort((a, b) => b.netEvsiUsd - a.netEvsiUsd || a.id.localeCompare(b.id));
+  const selected = scored.find(row => row.shouldAcquireConditional) ?? null;
+  return Object.freeze({
+    kind: 'joint-market-alternative-research-acquisition-menu-v1',
+    at, forecastId: forecast?.id ?? null,
+    selectedResearchId: selected?.id ?? null,
+    selectedConditionalNetEvsiUsd: selected?.netEvsiUsd ?? null,
+    rankedAlternatives: Object.freeze(scored.map(row => Object.freeze(row))),
+    evidenceGaps: Object.freeze(gaps.map(row => Object.freeze(row))),
+    noResearchPurchased: true, tradeEligible: false, orderEffect: false,
+    limitations: Object.freeze([
+      'each signal likelihood and action payoff remains an evidence-dependent, unverified model unless independently validated',
+      'alternative EVSI values are NOT additive; combined or sequential signals require a jointly calibrated kernel',
+      'signal search, inference payment, opponent repricing, venue order and realized alpha are not performed',
+    ]),
+  });
+}
