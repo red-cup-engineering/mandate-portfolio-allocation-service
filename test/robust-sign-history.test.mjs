@@ -57,6 +57,19 @@ test('shared SignCell source receipt cells precede a real robust SignCraft causa
  assert.deepEqual(r.priorHeads,historyHeads(h));
  assert.equal(r.sourceCells.length,p.premiseIds.length);
  assert.equal(r.linkCells.length,p.premiseIds.length);
+ assert.equal(r.flow.kind,'signgraph.flowNetwork');
+ assert.equal(r.flow.edges.length,p.premiseIds.length);
+ assert.ok(r.flow.edges.every(edge=>edge.to===p.address));
+ assert.deepEqual(r.flow.edges.map(e=>e.from).sort(),[...p.premiseIds].sort());
+ // Every one-chain boundary is negative at its source, positive at its
+ // conclusion; the old symmetric graph alone cannot establish this.
+ const boundary=new Map(r.flow.terms.map(t=>[t,0]));
+ for(const edge of r.flow.edges){
+   boundary.set(edge.from,boundary.get(edge.from)-1);
+   boundary.set(edge.to,boundary.get(edge.to)+1);
+ }
+ assert.equal(boundary.get(p.address),p.premiseIds.length);
+ assert.ok(p.premiseIds.every(id=>boundary.get(id)===-1));
  assert.ok(r.linkCells.every(c=>c.object===p.address),
   'every cause edge targets the proof content address, not the forecast itself');
  assert.equal(historySection(r.history,p.cell.subject,p.cell.predicate).length,1);

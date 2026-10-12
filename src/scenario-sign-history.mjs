@@ -12,7 +12,7 @@ import {cell, address, coincides} from '@red-cup-engineering/signcell/cell';
 import {
   createHistory, historyHeads, historySection, observeHistory, validateHistory,
 } from '@red-cup-engineering/signcraft/history';
-import {relationGraphOfCells} from '@red-cup-engineering/signgraph/cell-graph';
+import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/signgraph/cell-graph';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 
 const named=x=>typeof x==='string'&&x.trim().length>0;
@@ -142,6 +142,9 @@ export function composeConditionalScenarioHistory({
       }],
     })));
   const graph=relationGraphOfCells(links);
+  // The symmetric relation graph measures topology. SignGraph's existing
+  // oriented 1-chain preserves the premise -> derived-result causal boundary.
+  const flow=flowNetworkOfCells(links);
   let next=history;
   const priorHeads=historyHeads(next);
   const missing=receipts.filter(c=>!originalCellAt(next,c,{functional:true}));
@@ -151,7 +154,7 @@ export function composeConditionalScenarioHistory({
     throw new RangeError('existing inference has missing source custody or causal predecessor links');
   if(existingProof)return {
     kind:'conditional-scenario-sign-history-v1',status:'already-recorded',
-    history:next,sourceCells:receipts,linkCells:links,graph,
+    history:next,sourceCells:receipts,linkCells:links,graph,flow,
     proofAddress:projection.address,sourceRevisionId:null,
     proofRevisionId:null,priorHeads,heads:priorHeads,
     tradeEligible:false,orderEffect:false,
@@ -173,7 +176,7 @@ export function composeConditionalScenarioHistory({
       throw new Error('new SignCraft history did not retain a required SignCell');
   return Object.freeze({
     kind:'conditional-scenario-sign-history-v1',status:'composed',
-    history:next,sourceCells:receipts,linkCells:links,graph,
+    history:next,sourceCells:receipts,linkCells:links,graph,flow,
     proofAddress:projection.address,sourceRevisionId,
     proofRevisionId,priorHeads,heads:historyHeads(next),
     tradeEligible:false,orderEffect:false,
@@ -387,6 +390,9 @@ export function composeConditionalRobustActionHistory({
           proofAddress:projection.address,premiseId:id}],
       })));
   const graph=relationGraphOfCells(links);
+  // The symmetric relation graph measures topology. SignGraph's existing
+  // oriented 1-chain preserves the premise -> derived-result causal boundary.
+  const flow=flowNetworkOfCells(links);
   const priorHeads=historyHeads(history);
   const already=originalCellAt(history,projection.cell);
   const missingLinks=links.filter(c=>!originalCellAt(history,c));
@@ -394,7 +400,7 @@ export function composeConditionalRobustActionHistory({
     throw new RangeError('existing conditional evaluation has missing causal predecessor links');
   if(already)return Object.freeze({
     kind:'conditional-robust-action-sign-history-v1',status:'already-recorded',
-    history,sourceCells:sources,linkCells:links,graph,
+    history,sourceCells:sources,linkCells:links,graph,flow,
     proofAddress:projection.address,proofRevisionId:null,
     priorHeads,heads:priorHeads,tradeEligible:false,orderEffect:false,
   });
@@ -409,7 +415,7 @@ export function composeConditionalRobustActionHistory({
       throw new Error('native SignCraft history lost a required proof or causal source');
   return Object.freeze({
     kind:'conditional-robust-action-sign-history-v1',status:'composed',
-    history:next,sourceCells:sources,linkCells:links,graph,
+    history:next,sourceCells:sources,linkCells:links,graph,flow,
     proofAddress:projection.address,proofRevisionId,
     priorHeads,heads:historyHeads(next),
     tradeEligible:false,orderEffect:false,
