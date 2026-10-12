@@ -215,3 +215,51 @@ test('a principal EVM slot cannot silently replace its chain identity',()=>{
  assert.throws(()=>marketGame.extend(state1,{kind:'account',account:{...first,chainId:42161}}),/cannot silently switch chains/);
  assert.throws(()=>marketGame.extend(state1,{kind:'account',account:{...first,chainId:0}}),/positive chainId/);
 });
+
+
+test('a common Alpaca book is proportionally cleared and each principal is reoptimized',()=>{
+  const s=mixedFleet();
+  const first={venue:'alpaca',principal:policy.principal,observedAt:at,
+    equityCents:500,freeCashCents:500};
+  const second={...first,principal:personalPolicy.principal};
+  s.accounts={first,second};
+  s.quotes={asset:{...s.quotes.asset,availableUnits:3,unitStep:1}};
+  s.strategies.hedge.quoteIds=['asset'];
+  for(const world of s.forecast.scenarios){
+    world.heldPnlCentsByPrincipalVenue={
+      [policy.principal]:{alpaca:0},
+      [personalPolicy.principal]:{alpaca:0},
+    };
+  }
+  const before=structuredClone(s);
+  const independentFirst=planMarket({...s,accounts:{first}},policy,at);
+  const independentSecond=planMarket({...s,accounts:{second}},personalPolicy,at);
+  assert.equal(independentFirst.orders.reduce((n,o)=>n+o.units,0),3);
+  assert.equal(independentSecond.orders.reduce((n,o)=>n+o.units,0),3);
+  const fleet=planFleet(s,[personalPolicy,policy],at);
+  assert.deepEqual(s,before);
+  assert.deepEqual(fleet,planFleet(s,[policy,personalPolicy],at),
+    'independent policy iteration order cannot change the clearing result');
+  const amounts=Object.fromEntries(fleet.map(d=>[
+    d.principal,d.orders.reduce((n,o)=>n+o.units,0),
+  ]));
+  const total=Object.values(amounts).reduce((n,x)=>n+x,0);
+  assert.equal(total,3);
+  assert.ok(Object.values(amounts).every(n=>n>=1));
+  for(const decision of fleet){
+    assert.equal(decision.clearing.kind,'fleet-proportional-integer-book-clearing-v1');
+    assert.equal(decision.effect,'intent-only');
+    const {id,...body}=decision;assert.equal(id,hashPosition(body));
+    assert.equal(decision.scenarioWealth.length,2);
+  }
+});
+test('one principal cannot consume a shared quote twice through independent aliases',()=>{
+  const s=mixedFleet();
+  delete s.accounts.evm;
+  s.quotes.asset.availableUnits=2;
+  s.quotes.asset2={...s.quotes.asset,id:'asset2',availableUnits:2};
+  s.strategies.hedge.quoteIds=['asset','asset2'];
+  for(const world of s.forecast.scenarios) world.values.asset2=world.values.asset;
+  const result=planMarket(s,personalPolicy,at);
+  assert.ok(result.orders.reduce((n,o)=>n+o.units,0)<=2+1e-9);
+});

@@ -7,7 +7,7 @@ import { jointKellyForScenarioReturns } from '@red-cup-engineering/position-sizi
 import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 import {assessExecutableBook} from './executable-book.mjs';
 import { principalVenueKey, assertAccountChainScope, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
-import { assertFleetBookCapacity } from './fleet-liquidity-border.mjs';
+import { marketSideKey, assertFleetBookCapacity, apportionFleetBookDemand } from './fleet-liquidity-border.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -262,7 +262,9 @@ function countedLossRecord(record) {
  * Limits act on funded capital; they do not imply fungible venue cash or atomic
  * cross-venue execution. Existing holdings enter every scenario explicitly.
  */
-export function planMarket(state, policy, at) {
+export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}) {
+  if (sideCapacityLimits !== null && (!sideCapacityLimits || typeof sideCapacityLimits !== 'object' || Array.isArray(sideCapacityLimits)))
+    throw new TypeError('principal market-side quotas must be an object of finite executable units');
   if (!policy || !Number.isSafeInteger(policy.minCalibrationSamples) || policy.minCalibrationSamples < 1) throw new TypeError('positive calibration sample minimum required');
   for (const field of ['maxDeployFraction', 'maxInstrumentFraction', 'maxScenarioLossFraction']) if (!(finite(policy[field], field) > 0) || policy[field] > 1) throw new RangeError(`${field} must be in (0,1]`);
   if(policy.requireExecutableBook!==undefined&&
@@ -386,6 +388,24 @@ export function planMarket(state, policy, at) {
     const cap = Math.min(nonnegative(policy.maxInstrumentFraction, 'instrument cap'), quotedCapacity * capitalPerUnit * 100 / equity);
     add(candidates.map((_, j) => Number(i === j)), cap);
   }
+  // Several quote IDs can represent the SAME market-side liquidity. Bind
+  // their total units to one book cap inside the portfolio optimizer, rather
+  // than hoping a post-hoc fleet check catches an already-sized overclaim.
+  const sideGroups = new Map();
+  candidates.forEach((c,i) => {
+    const key = marketSideKey(c.q);
+    const group = sideGroups.get(key) ?? {indices:[],capacity:Infinity};
+    group.indices.push(i);group.capacity=Math.min(group.capacity,c.quotedCapacity);
+    sideGroups.set(key,group);
+  });
+  for (const [key, group] of sideGroups) {
+    const quota = sideCapacityLimits === null ? group.capacity : sideCapacityLimits[key];
+    if (!Number.isFinite(quota) || quota < 0 ||
+        quota > group.capacity + 1e-10 * Math.max(1,group.capacity))
+      throw new RangeError('missing or excessive principal market-side capacity quota');
+    const participating = new Set(group.indices);
+    add(candidates.map((c,i) => participating.has(i) ? equity / (c.capitalPerUnit * 100) : 0), quota);
+  }
   for (const [factor, cap] of Object.entries(policy.factorCaps ?? {})) {
     const held = accounts.reduce((s, a) => s + nonnegative(a.factorExposureCents?.[factor] ?? 0, 'held factor exposure'), 0) / equity;
     const loadings = candidates.map(({ q }) => q.funding ? finite(q.factors?.[factor] ?? 0, 'inventory exchange factor change') : nonnegative(q.factors?.[factor] ?? 0, 'factor loading'));
@@ -419,7 +439,12 @@ export function planMarket(state, policy, at) {
   if (constraints.some(({ coefficients: a, cap }) => a.reduce((s, x, i) => s + x * fractions[i], 0) > cap + 1e-9)) throw new RangeError('discrete quantities breach joint limits');
   const body = { type: 'MarketGameDecision', principal, at, position: hashPosition(state), forecast: f.id, horizon: f.horizon, orders, skips, equityCents: equity,
     scenarioWealth: f.scenarios.map((s, k) => ({ id: s.id, probability: s.probability, wealth: baseline[k] + candidates.reduce((sum, c, i) => sum + c.returns[k] * fractions[i], 0) })),
-    sizing: { converged: sized.converged, kktResidual: sized.kktResidual }, performance: strategyPerformance(state), effect: 'intent-only' };
+    sizing: { converged: sized.converged, kktResidual: sized.kktResidual }, performance: strategyPerformance(state),
+    ...(sideCapacityLimits === null ? {} : { clearing: {
+      kind: 'fleet-proportional-integer-book-clearing-v1',
+      marketSideCapacityLimits: Object.fromEntries(Object.entries(sideCapacityLimits)
+        .sort(([a],[b]) => a.localeCompare(b))),
+    } }), effect: 'intent-only' };
   return { id: hashPosition(body), ...body };
 }
 
@@ -443,17 +468,32 @@ export function planFleet(state, policies, at) {
       if (sharedVenues.has(account.venue))
         scenarioHeldPnLCents(scenario, account.principal, account.venue, { requireScoped: true });
   const fleetPosition = hashPosition(state);
-  const scopedDecisions = principals.map(principal => {
+  const scopedPositions = principals.map(principal => {
     const ownAccounts = accounts.filter(account => account.principal === principal), venues = new Set(ownAccounts.map(account => account.venue));
     const quotes = Object.fromEntries(Object.entries(state.quotes).filter(([,quote]) => venues.has(quote.venue)));
     const strategies = Object.fromEntries(Object.entries(state.strategies).map(([id,strategy]) => [id,{...strategy,quoteIds:strategy.quoteIds.filter(id => Object.hasOwn(quotes,id))}]).filter(([,strategy]) => strategy.quoteIds.length));
     const decisions = Object.fromEntries(Object.entries(state.decisions).filter(([,decision]) => decision.principal === principal));
     const outcomes = Object.fromEntries(Object.entries(state.outcomes).filter(([,outcome]) => Object.hasOwn(decisions,outcome.decisionId)));
     const position = {...state,accounts:Object.fromEntries(ownAccounts.map(account => [principalVenueKey(account),account])),quotes,strategies,decisions,outcomes};
-    const {id,...body} = planMarket(position, byPrincipal.get(principal), at);
+    return {principal,position};
+  });
+  const planScoped = (entry, quotas = null) => {
+    const {id,...body} = planMarket(entry.position, byPrincipal.get(entry.principal), at,
+      quotas === null ? undefined : {sideCapacityLimits:quotas});
     const decision = {...body,fleetPosition};
     return {id:hashPosition(decision),...decision};
-  });
+  };
+  // First elicit each principal's funded demand without assuming the common
+  // order book is duplicated across principals. If demand exceeds a book's
+  // integer lots, apportion those lots, then rerun EACH principal's actual
+  // joint-scenario optimizer under its own allocation. Never truncate a
+  // completed order (which would falsify its policy/wealth calculation).
+  const independent = scopedPositions.map(entry => planScoped(entry));
+  const clearing = apportionFleetBookDemand(state.quotes, independent);
+  const scopedDecisions = clearing.oversubscribed
+    ? scopedPositions.map(entry => planScoped(entry,
+        clearing.quotasByPrincipal[entry.principal]))
+    : independent;
   assertFleetBookCapacity(state.quotes, scopedDecisions);
   return scopedDecisions;
 }
