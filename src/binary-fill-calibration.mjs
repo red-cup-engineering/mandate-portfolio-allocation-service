@@ -114,13 +114,18 @@ export function fitBinaryOutcomeFillByDay({
  const modelId=hashPosition({
   kind:'outcome-conditioned-day-block-fill-fit-v1',
   familyScope,quoteRegime,side,freezeAt,publishedAt,maxBookAgeMs,
-  sourceOrders:provenance.map(x=>[x.venueOrderId,x.settlementReceiptId,
-   x.executionReceiptId,x.settlementAvailableAt]),
+  alpha,minDaysPerOutcome,
+  // Semantic training identity MUST commit the received value, not merely
+  // reused receipt identifiers. Different wins, fills or hyperparameters
+  // cannot share one content address or masquerade as the old calibration.
+  sourceOrders:provenance.map(x=>[x.venueOrderId,x.eventId,x.marketId,
+   x.settlementDay,x.won,x.filled,x.evidenceIds.slice().sort(cmp),
+   x.settlementReceiptId,x.executionReceiptId,x.settlementAvailableAt]),
  });
  return {
   kind:'outcome-conditioned-day-block-fill-fit-v1',
   id:modelId,familyScope,quoteRegime,side,freezeAt,maxBookAgeMs,
-  availableAt:publishedAt,
+  alpha,minDaysPerOutcome,availableAt:publishedAt,
   admitted:false,status:ready?'exploratory-intervals':'insufficient-independent-outcome-days',
   modelCandidate:ready?{
    probabilityFillGivenWin:win.interval,
