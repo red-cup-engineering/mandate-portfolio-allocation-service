@@ -6,7 +6,7 @@ import { gameRules, hashPosition } from '@red-cup-engineering/gaming/running/rul
 import { jointKellyForScenarioReturns } from '@red-cup-engineering/position-sizing-service';
 import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 import {assessExecutableBook} from './executable-book.mjs';
-import { principalVenueKey, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
+import { principalVenueKey, assertAccountChainScope, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -30,7 +30,7 @@ function extend(state, move) {
       next = { ...state, observations: { ...state.observations, [row.id]: row } }; break;
     }
     case 'account': {
-      const row = move.account; venue(row.venue); time(row.observedAt);
+      const row = move.account; venue(row.venue); time(row.observedAt); assertAccountChainScope(row);
       name(row.principal);
       money(row.equityCents); money(row.freeCashCents); money(row.reservedCents ?? 0);
       if (row.freeCashCents > row.equityCents) throw new RangeError('deployable cash exceeds equity; borrowing is not equity');
@@ -38,7 +38,11 @@ function extend(state, move) {
         name(instrument); nonnegative(holding.units, 'held inventory units'); nonnegative(holding.availableUnits, 'available inventory units');
         if (!(finite(holding.markPrice, 'inventory mark') > 0) || holding.availableUnits > holding.units) throw new RangeError('inventory availability or mark invalid');
       }
-      next = { ...state, accounts: put(state.accounts, principalVenueKey(row), row) }; break;
+      const accountKey = principalVenueKey(row);
+      if (row.venue === 'evm' && state.accounts[accountKey] &&
+          state.accounts[accountKey].chainId !== row.chainId)
+        throw new RangeError('EVM principal/venue slot cannot silently switch chains');
+      next = { ...state, accounts: put(state.accounts, accountKey, row) }; break;
     }
     case 'quote': {
       const row = move.quote; name(row.id); venue(row.venue); name(row.instrument); time(row.observedAt);
@@ -338,6 +342,7 @@ export function planMarket(state, policy, at) {
         const stateAge=BigInt(now)-BigInt(q.blockTimestamp)*1000n;
         if (stateAge<0n || stateAge>BigInt(Math.floor(Math.min(maxAge,60000))) || now-time(q.observedAt)>60000) { refuse('EVM quote market state is future or stale'); continue; }
       }
+      if (q.venue === 'evm' && accountByVenue.get('evm').chainId !== q.chainId) { refuse('EVM account and quote chainId differ'); continue; }
       if (q.venue === 'evm' && q.carrier === 'collateral' && (!(q.leverage > 0) || !Number.isFinite(q.leverage) || !q.collateralToken)) { refuse('collateral payoff requires leverage and token identity'); continue; }
       if (q.funding && q.venue !== 'evm') throw new TypeError('inventory exchanges require an EVM venue consumer');
       const holding = q.funding && accountByVenue.get(q.venue).inventory?.[q.funding.instrument];

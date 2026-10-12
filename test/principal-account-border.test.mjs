@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  principalVenueKey, indexPrincipalAccounts,
+  principalVenueKey, assertAccountChainScope, indexPrincipalAccounts,
   sharedPrincipalVenues, scenarioHeldPnLCents,
 } from '../src/principal-account-border.mjs';
 
@@ -36,4 +36,14 @@ test('scenario baseline uses principal-specific holdings, never another owner\'s
   assert.throws(()=>scenarioHeldPnLCents(scenario,'stranger','alpaca',{requireScoped:true}),/principal-scoped/);
   assert.throws(()=>scenarioHeldPnLCents({heldPnlCentsByVenue:{alpaca:40}},'person','alpaca',{requireScoped:true}),/principal-scoped/);
   assert.throws(()=>scenarioHeldPnLCents({heldPnlCentsByPrincipalVenue:{group:{alpaca:0.1}}},'group','alpaca'),/integer cents/);
+});
+
+test('EVM principal observations are unusable without a concrete positive chain',()=>{
+ const evm=account('group','evm');
+ assert.throws(()=>assertAccountChainScope(evm),/explicit positive chainId/);
+ assert.throws(()=>indexPrincipalAccounts({evm},'group'),/explicit positive chainId/);
+ assert.equal(assertAccountChainScope({...evm,chainId:42161}).chainId,42161);
+ for(const chainId of [0,-1,1.5,NaN,Infinity,'42161']){
+  assert.throws(()=>assertAccountChainScope({...evm,chainId}),/explicit positive chainId/);
+ }
 });

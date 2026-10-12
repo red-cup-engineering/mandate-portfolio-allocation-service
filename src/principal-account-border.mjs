@@ -18,13 +18,27 @@ export function principalVenueKey({ principal, venue } = {}) {
   return JSON.stringify([principal, venue]);
 }
 
+/**
+ * One EVM venue slot must identify its chain. An Arbitrum quote cannot spend
+ * a Base account observation merely because both are labelled 'evm'.
+ * Multi-chain accounts require a richer (principal, chain, account) model;
+ * this existing one-slot carrier must fail closed instead of pooling them.
+ */
+export function assertAccountChainScope(account) {
+  principalVenueKey(account);
+  if (account.venue === 'evm' &&
+      (!Number.isSafeInteger(account.chainId) || account.chainId <= 0))
+    throw new TypeError('EVM account requires an explicit positive chainId');
+  return account;
+}
+
 /** Never let two account rows contribute the same capital twice. */
 export function indexPrincipalAccounts(accounts, principal) {
   if (!named(principal) || !accounts || typeof accounts !== 'object' || Array.isArray(accounts))
     throw new TypeError('principal-scoped account collection required');
   const byVenue = new Map();
   for (const account of Object.values(accounts)) {
-    principalVenueKey(account);
+    assertAccountChainScope(account);
     if (account.principal !== principal)
       throw new TypeError('funded accounts must belong to the declared decision principal');
     if (byVenue.has(account.venue))
