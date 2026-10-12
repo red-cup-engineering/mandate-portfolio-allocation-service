@@ -96,6 +96,55 @@ and holding costs. Final discrete quantities are checked again against limits.
 Existing holdings that already breach limits require a separate reduction
 decision; new capital is refused rather than silently called a hedge.
 
+## Condition actual signal receipts on the SAME joint market game
+
+The shared `joint-scenario-condition.mjs` is now the single finite Bayes
+operator for both this package's existing replayable `condition` move
+(binned numerical features) and its categorical research signal model. These
+are different evidence-admission interfaces, **not two independent probability
+theories**. Both change the same scenario probabilities across every affected
+market and portfolio action.
+
+The market-information command exposes three read-only workflows:
+
+```sh
+node apps/market-information.mjs assess acquisition-packet.json
+node apps/market-information.mjs compare acquisition-menu.json
+node apps/market-information.mjs condition received-signal-packet.json
+```
+
+The `condition` packet supplies `forecast` (the existing joint-scenario
+carrier), `signalModel`, `observation`, `at`, and optionally a fixed
+`actions` payoff menu. `signalModel.conditionedOnForecastId` MUST name the
+exact forecast that supplied its prior probabilities. The received
+`observation` supplies a distinct `id`, named `signalId`,
+`observedAt`, `availableAt` and the original `evidenceIds`. Model release,
+original observation and receipt clocks are checked separately.
+
+This returns a joint posterior under the precommitted emission model, its
+entire scenario distribution, information gain, and (when actions are supplied)
+a conditional ranking of the **same** feasible actions, with abstention.
+An impossible observation is a model conflict, not an inferred certain win.
+The finite Bayes function is source-agnostic, so it is reusable for priced
+research from news, filings, sports, commodity reports, or weather—provided
+those signals have a frozen, independently evaluated likelihood kernel.
+
+`projectObservedScenarioConditioningSign`, exported from
+`./settlement-sign-evidence`, realizes a successfully derived posterior as
+an actual SignCell + SignChain conditional proof of a *model update*.
+Its context commits to the prior, frozen likelihood, observation receipt,
+source/rule/target identity and all posterior scenario weights. Its
+`sourceRelations` are suitable for an existing SignGraph/SignCraft causal
+journal; the projection does **not** authenticate original publisher bytes or
+assert that a market settles YES. Coesite must separately verify the source,
+address and journal receipt. No new content-address, graph or signer is
+introduced here.
+
+`id` on the research posterior is only a compositional lineage reference,
+not a substitute for the canonical SignCell content address. The original
+stateful market game's `condition` move retains its existing
+`hashPosition` adoption semantics and out-of-sample calibration gate.
+
 ## Consume the funded decision
 
 * Kalshi desk: `cycle --market-decision=decision.json` caps new placements
