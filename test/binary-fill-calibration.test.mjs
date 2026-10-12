@@ -123,3 +123,24 @@ test('validation guards group consistency and both outcome coverage',()=>{
  assert.throws(()=>fit({alpha:0}),TypeError);
  assert.throws(()=>fit({maxBookAgeMs:0}),TypeError);
 });
+
+
+test('calibration identity commits actual outcome, fill and hyperparameters, not only reusable receipt labels',()=>{
+ const original=fit();
+ const flipped=rows();
+ flipped[0]={...flipped[0],filled:!flipped[0].filled,
+   ...(flipped[0].filled?{fillReceivedAt:undefined}:{fillReceivedAt:flipped[0].placedAt})};
+ const revised=fit({rows:flipped});
+ assert.notEqual(revised.id,original.id,'changed received fill result needs a new content address');
+ assert.notDeepEqual(revised.outcomeDayEvidence.win,original.outcomeDayEvidence.win);
+ const labelChange=rows();
+ labelChange[0]={...labelChange[0],settlementSide:'no'};
+ const reclassified=fit({rows:labelChange});
+ assert.notEqual(reclassified.id,original.id);
+ const newAlpha=fit({alpha:.1});
+ assert.notEqual(newAlpha.id,original.id,'changing the confidence bound changes the model identity');
+ const newThreshold=fit({minDaysPerOutcome:35});
+ assert.notEqual(newThreshold.id,original.id);
+ const stricterBook=fit({maxBookAgeMs:45_000});
+ assert.notEqual(stricterBook.id,original.id);
+});
