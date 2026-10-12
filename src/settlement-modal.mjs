@@ -22,7 +22,9 @@ const timestamp = (x) => typeof x === 'string' && Number.isFinite(Date.parse(x))
 const intersects = (a,b) => !(a.upper < b.lower || b.upper < a.lower);
 const inside = (a,b) => a.lower >= b.lower && a.upper <= b.upper;
 const intersection = (a,b) => ({lower:Math.max(a.lower,b.lower), upper:Math.min(a.upper,b.upper)});
-const asBound = (p) => ({lower:p.lower,upper:p.upper});
+const encodeEdge = (x) => x===Infinity?'Infinity':x===-Infinity?'-Infinity':x;
+// JSON/SignCell content addresses must not silently encode unbounded endpoints as null.
+const asBound = (p) => ({lower:encodeEdge(p.lower),upper:encodeEdge(p.upper)});
 
 /**
  * @param {{payout:{lower:number,upper:number}, premises:Array<{id:string,lower:number,upper:number,observedAt:string,availableAt:string}>,at:string}} input
@@ -71,7 +73,7 @@ export function deduceSettlementInterval({payout,premises=[],at}={}) {
   return {
     support,qualifiedPremises:used.map(x=>x.id),withheld,
     inconsistentPremises:conflict,
-    remainingDomain:conflict?null:common,
+    remainingDomain:conflict||common===null?null:asBound(common),
     admissibleWorlds:openWorld,
     // FOUR belongs to SignCell; do not collapse these independent witness arrays
     // into one Boolean, certainty, or internally reinvented four-valued enum.
