@@ -18,7 +18,8 @@
     "./scenario-study": "./src/scenario-study.mjs",
     "./prediction-market-research": "./src/prediction-market-research.mjs",
     "./crypto-historical-observations": "./src/crypto-historical-observations.mjs",
-    "./equity-prediction-market-research": "./src/equity-prediction-market-research.mjs"
+    "./equity-prediction-market-research": "./src/equity-prediction-market-research.mjs",
+    "./settlement-sign-evidence": "./src/settlement-sign-evidence.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -26,7 +27,9 @@
   "dependencies": {
     "@red-cup-engineering/position-sizing-service": "workspace:*",
     "@red-cup-engineering/gaming": "workspace:*",
-    "@red-cup-engineering/communicating": "workspace:*"
+    "@red-cup-engineering/communicating": "workspace:*",
+    "@red-cup-engineering/signcell": "workspace:*",
+    "@red-cup-engineering/signchain": "workspace:*"
   },
   "bin": {
     "market-game": "./apps/market-game.mjs",
