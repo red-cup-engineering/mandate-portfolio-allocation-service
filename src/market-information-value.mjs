@@ -261,7 +261,6 @@ export function conditionMarketForecastOnSignal({
   const assessment = evaluateMarketInformationValue({
     forecast, actions: admittedActions, signalModel, at,
   });
-  const source = assessment.signals.find(s => s.signal === observation.signalId);
 
   // Log-sum-exp prevents a very rare but possible signal from numerically
   // disappearing when valid positive input probabilities are tiny.
@@ -302,7 +301,16 @@ export function conditionMarketForecastOnSignal({
     })),
   };
   const divergenceNats = posteriorMass.reduce((sum, q, i) => q === 0 ? sum :
-    sum + q * Math.log(q / forecast.scenarios[i].probability), 0);
+    sum + q * (Math.log(q) - Math.log(forecast.scenarios[i].probability)), 0);
+  // Rank the SAME validated payoff menu under the RECEIVED posterior.
+  // Never infer a post-signal action using the pre-signal EVSI value, nor
+  // suppress an admissible rare observation through a coarse mass cutoff.
+  const rankedActions = actions === null ? null :
+    admittedActions.map(action => ({
+      id: action.id,
+      expectedUsd: posterior.scenarios.reduce((sum, s) =>
+        sum + s.probability * action.payoffsUsdByScenario[s.id], 0),
+    })).sort((a, b) => b.expectedUsd - a.expectedUsd || a.id.localeCompare(b.id));
   return {
     kind: 'joint-market-scenario-signal-conditioning-v1',
     status: 'conditional-research-posterior',
@@ -313,10 +321,11 @@ export function conditionMarketForecastOnSignal({
     realizedSurprisalBits: -logLikelihood / Math.LN2,
     posteriorPriorDivergenceNats: Math.max(0, divergenceNats),
     forecast: posterior,
-    conditionalAction: actions === null ? null : {
+    conditionalAction: rankedActions === null ? null : {
       priorBestAction: assessment.baseBestAction,
-      posteriorBestAction: source.bestAction,
-      posteriorExpectedUsd: source.conditionalExpectedUsd,
+      posteriorBestAction: rankedActions[0].id,
+      posteriorExpectedUsd: rankedActions[0].expectedUsd,
+      rankedActions,
       actionMenuFixed: true,
     },
     limitations: [
