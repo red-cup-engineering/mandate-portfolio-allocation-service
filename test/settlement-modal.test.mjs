@@ -185,3 +185,28 @@ test('an ended observation window does not allow any future rate segment',()=>{
    temperature:{lower:80,upper:80},achievedExtreme:{lower:88,upper:88},
    segments:[rate('old',-1,1)]}),RangeError);
 });
+
+
+test('derived extrema contain every sampled continuous-rate path under the same premises',()=>{
+ const epsilon=1e-9,small=1/12;
+ for(const kind of ['high','low'])for(let seed=-2;seed<=2;seed++)
+ for(let rMin=-3;rMin<=0;rMin++)for(let rMax=0;rMax<=3;rMax++){
+  const achieved=kind==='high'?seed+1:seed-1;
+  const env=path(kind,{lower:seed,upper:seed},{lower:achieved,upper:achieved},
+    [rate('entire-two-hour-derivative-bound',rMin,rMax)]);
+  assert.equal(env.status,'conditional-rate-bounded-reachability');
+  for(let pattern=0;pattern<5;pattern++){
+   let physical=seed,extreme=achieved;
+   for(let k=0;k<24;k++){
+    // Finite piecewise-linear sample. Within each small step the
+    // instantaneous derivative is still inside the declared interval.
+    const mix=((7*k+pattern*5)%11)/10;
+    const slope=rMin+(rMax-rMin)*mix;
+    physical+=slope*small;
+    extreme=kind==='high'?Math.max(extreme,physical):Math.min(extreme,physical);
+   }
+   assert.ok(extreme>=env.finalExtreme.lower-epsilon);
+   assert.ok(extreme<=env.finalExtreme.upper+epsilon);
+  }
+ }
+});
