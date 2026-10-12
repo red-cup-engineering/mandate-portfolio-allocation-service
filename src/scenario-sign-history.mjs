@@ -14,6 +14,9 @@ import {
 } from '@red-cup-engineering/signcraft/history';
 import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/signgraph/cell-graph';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
+import {
+  finiteLawExpectation,extremalTotalVariationExpectation,upperTailMeanOfFiniteLaw,
+} from '@red-cup-engineering/metrologic/number/finite-law';
 
 const named=x=>typeof x==='string'&&x.trim().length>0;
 const instant=x=>typeof x==='string'&&
@@ -321,6 +324,79 @@ function requiredRobustProjection(p){
     exact.minWorstExpectedShortfallAction!==p.evaluation.minWorstExpectedShortfallAction||
     exact.minWorstExpectedShortfallAction!==c.minWorstExpectedShortfallAction)
     throw new TypeError('independent receiving replay disagrees with conditional joint ambiguity proof');
+
+  // Independent mathematical RECEIVING from the owning Metrologic numerical
+  // layer, NOT another financial forecast or separate portfolio optimizer.
+  // The existing financial game makes the proposed decision. Metrologic
+  // checks its finite-law arithmetic over the SAME original joint worlds.
+  const probabilityVector=forecast.scenarios.map(world=>world.probability);
+  const worldIds=forecast.scenarios.map(world=>world.id);
+  const within=(x,y)=>Number.isFinite(x)&&Number.isFinite(y)&&
+    Math.abs(x-y)<=1e-10+2e-12*Math.max(Math.abs(x),Math.abs(y));
+  const candidates=new Map(exact.actionEvaluations.map(row=>[row.id,row]));
+  const presented=new Map(p.evaluation.actionEvaluations.map(row=>[row.id,row]));
+  const witness=(rows,values,expectedValue,reportedTV)=>{
+    if(!Array.isArray(rows)||rows.length!==worldIds.length||
+      new Set(rows.map(row=>row?.[0])).size!==worldIds.length||
+      rows.some(row=>!Array.isArray(row)||row.length!==2||
+        !worldIds.includes(row[0])||!Number.isFinite(row[1])||
+        row[1]<0||row[1]>1))return false;
+    const byId=new Map(rows),q=worldIds.map(id=>byId.get(id));
+    const mass=q.reduce((acc,value)=>acc+value,0);
+    const tv=q.reduce((acc,value,i)=>
+      acc+Math.abs(value-probabilityVector[i]),0)/2;
+    return Math.abs(mass-1)<=1e-9 &&
+      tv<=ambiguity.totalVariationRadius+1e-9 &&
+      within(reportedTV,tv)&&
+      within(finiteLawExpectation({probabilities:q,values}),expectedValue);
+  };
+  for(const action of actions){
+    const values=worldIds.map(id=>action.payoffsUsdByScenario[id]);
+    const row=candidates.get(action.id),given=presented.get(action.id);
+    if(!row||!given)
+      throw new TypeError('Metrologic independent receiving lacks a bounded complete action row');
+    const nominal=finiteLawExpectation({
+      probabilities:probabilityVector,values,
+    });
+    const low=extremalTotalVariationExpectation({
+      probabilities:probabilityVector,values,
+      radius:ambiguity.totalVariationRadius,direction:'min',
+    });
+    const high=extremalTotalVariationExpectation({
+      probabilities:probabilityVector,values,
+      radius:ambiguity.totalVariationRadius,direction:'max',
+    });
+    const regret=Math.max(0,...actions.map(competing=>
+      extremalTotalVariationExpectation({
+        probabilities:probabilityVector,
+        values:worldIds.map(id=>competing.payoffsUsdByScenario[id]-
+          action.payoffsUsdByScenario[id]),
+        radius:ambiguity.totalVariationRadius,direction:'max',
+      }).value));
+    if(!within(nominal,row.nominalExpectedUsd)||
+       !within(low.value,row.worstCaseExpectedUsd)||
+       !within(high.value,row.bestCaseExpectedUsd)||
+       !within(regret,row.worstCaseRegretUsd)||
+       !witness(given.worstCaseScenarioProbabilities,values,
+         row.worstCaseExpectedUsd,given.worstCaseUsedTotalVariation)||
+       !witness(given.bestCaseScenarioProbabilities,values,
+         row.bestCaseExpectedUsd,given.bestCaseUsedTotalVariation))
+      throw new TypeError('Metrologic finite-law receiving disagrees with original conditional probability proof or extremal witnesses');
+    if(ambiguity.tailFraction!==undefined){
+      const losses=values.map(value=>-value);
+      const normal=upperTailMeanOfFiniteLaw({
+        probabilities:probabilityVector,values:losses,
+        tailFraction:ambiguity.tailFraction,
+      });
+      const adverse=upperTailMeanOfFiniteLaw({
+        probabilities:low.probabilities,values:losses,
+        tailFraction:ambiguity.tailFraction,
+      });
+      if(!within(normal,row.nominalExpectedShortfallUsd)||
+         !within(adverse,row.worstCaseExpectedShortfallUsd))
+        throw new TypeError('Metrologic probability-mass tail risk disagrees with the address-bound conditional proof');
+    }
+  }
   return {forecast,ambiguity,actions,replayed:exact};
 }
 

@@ -35,7 +35,8 @@
     "@red-cup-engineering/signcell": "workspace:*",
     "@red-cup-engineering/signchain": "workspace:*",
     "@red-cup-engineering/signgraph": "workspace:*",
-    "@red-cup-engineering/signcraft": "workspace:*"
+    "@red-cup-engineering/signcraft": "workspace:*",
+    "@red-cup-engineering/metrologic": "workspace:*"
   },
   "bin": {
     "market-game": "./apps/market-game.mjs",

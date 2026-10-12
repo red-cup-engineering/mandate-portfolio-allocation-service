@@ -229,6 +229,34 @@ Any 561 Group or Causeway public-facing explanation should expose the
 assumption and abstention explicitly, and must not disclose principal books,
 wallet authority or private order data.
 
+## Mathematical receiving through upstream Metrologic
+
+The financial decision operator remains the existing joint market game and
+distributional ambiguity service. Native SignCraft composition additionally
+checks its *address-bound* expected payoffs, TV-ball extrema, regret values,
+actual adversarial joint-world probability witnesses and optional expected
+shortfall using the **independent, reusable** mathematical operations in
+`@red-cup-engineering/metrologic/number/finite-law`.
+
+This strengthens the mathematics-to-evidence bridge rather than making a
+second forecast system. The financial provider supplies the named worlds,
+source-clock-qualified model, complete USD payoff vectors and feasible fixed
+actions; Metrologic knows only weights and scalar mathematical quantities.
+Each claimed extremal scenario distribution is checked for uniqueness of
+world identity, normalized nonnegative mass, the assumed TV budget, and
+consistency with its reported value. An invented adversarial witness can no
+longer borrow the canonical SignCell proof merely by copying the headline
+expected payoff. The optional mass-weighted downside tail calculation is
+also independently repeated there.
+
+Metrologic's binary64 result is a **conditional numerical assay**, not a
+Lean theorem receipt, empirical probability calibration, proof of realized
+trading profit or permission to sign/submit an order. Coesite still owns
+original-source custody, SignGraph causality and durable SignCraft receiving.
+The 561 Group receives only the independently accepted research fields and
+keeps corporate/personal capital principals separate. A source dependency
+merge does not establish installed host receiving.
+
 ## Native SignCraft/SignGraph receipt composition
 
 The `./scenario-sign-history` export is an executable, pure bridge from a

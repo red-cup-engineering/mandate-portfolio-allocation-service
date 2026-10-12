@@ -166,3 +166,40 @@ test('optional joint downside tail-risk preference and values are part of the ca
   history:staged(p),projection:forged,
  }),/replay disagrees/);
 });
+
+
+test('Metrologic receiver refuses forged extremal distribution even when copied headline values are unchanged',()=>{
+  const p=projection();
+  const tampered={...p,evaluation:{
+    ...p.evaluation,
+    actionEvaluations:p.evaluation.actionEvaluations.map(row=>({
+      ...row,
+      worstCaseScenarioProbabilities:row.worstCaseScenarioProbabilities
+        .map(([id,mass])=>[id,mass]),
+    })),
+  }};
+  const changed=tampered.evaluation.actionEvaluations.find(row=>row.id==='kalshi-up');
+  // Headline expected return and canonical SignCell are left untouched.
+  // A forged witness q can no longer borrow their signed calculation.
+  changed.worstCaseScenarioProbabilities[0][1]=.99;
+  changed.worstCaseScenarioProbabilities[1][1]=.01;
+  assert.throws(()=>composeConditionalRobustActionHistory({
+    history:staged(p),projection:tampered,
+  }),/Metrologic finite-law receiving disagrees/);
+});
+
+test('Metrologic receives a complete tail proof without asserting the assumed radius is measured',()=>{
+  const p=projectConditionalRobustActionSign({
+    forecast:forecast(),ambiguity:{...ambiguity(),tailFraction:.8},
+    actions:actions(),at,
+    context:{source:'mixed-qualified-study',rules:'joint-source-rule-v1',
+      scope:'cross-venue-fixed-actions',assumption:'hypothetical uncertainty'},
+  });
+  const result=composeConditionalRobustActionHistory({
+    history:staged(p),projection:p,
+  });
+  assert.equal(result.status,'composed');
+  assert.equal(result.tradeEligible,false);
+  assert.equal(result.orderEffect,false);
+  assert.equal(p.radiusEmpiricallyVerified,false);
+});
