@@ -48,6 +48,9 @@ function requiredProjection(p){
      p.conditionalEvidence.signalModelId!==p.premiseIds[1]||
      p.conditionalEvidence.observationId!==p.premiseIds[2]||
      p.conditionedForecast.id!==p.cell.subject||
+     !Array.isArray(p.conditionedForecast.scenarios)||
+     !same(p.context.posteriorScenarioWeights,
+       p.conditionedForecast.scenarios.map(s=>[s.id,s.probability]))||
      p.context.posteriorForecastId!==p.cell.subject||
      p.context.availableAt!==p.at||
      !instant(p.conditionalEvidence.priorObservedAt)||
@@ -100,7 +103,7 @@ export function scenarioSourceReceiptCells(projection,sourceReceipts){
     if(Date.parse(r.availableAt)!==Date.parse(want.availableAt))
       throw new TypeError('source availability clock disagrees with its conditional proof');
   }
-  return Object.freeze([...byId.values()].sort((a,b)=>a.id.localeCompare(b.id))
+  return Object.freeze([...byId.values()].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0)
     .map(r=>cell(r.id,'prediction-market-source-receipt',{
       kind:'prediction-market-source-receipt-v1',sourceRef:r.sourceRef,
       issuer:r.issuer,sha256:r.sha256,
@@ -164,8 +167,8 @@ export function composeConditionalScenarioHistory({
     source:source+':conditional-inference',
   });
   const proofRevisionId=next.revisions.at(-1).id;
-  if(!next.revisions.at(-1).parents.every(id=>
-      (sourceRevisionId?[sourceRevisionId]:priorHeads).includes(id)))
+  if(!same(next.revisions.at(-1).parents,
+     sourceRevisionId?[sourceRevisionId]:priorHeads))
     throw new Error('SignCraft inference revision lost its original causal predecessor');
   for(const c of [...receipts,...links,projection.cell])
     if(!originalCellAt(next,c))
