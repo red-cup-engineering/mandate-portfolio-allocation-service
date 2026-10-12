@@ -117,7 +117,12 @@ export const marketGame = gameRules(initial, extend);
  */
 export function conditionMarketForecast(state, observationId, model, at) {
   const f = state.forecast, o = state.observations[observationId], evidence = state.observations[model?.evidenceId];
-  if (!f || !o || !evidence || time(o.observedAt) > time(at) || time(evidence.observedAt) > time(at)) throw new RangeError('conditioning requires presently available evidence');
+  if (!f || !o || !evidence || time(o.observedAt) > time(at) ||
+      time(evidence.observedAt) > time(at))
+    throw new RangeError('conditioning requires presently available evidence');
+  if(time(evidence.observedAt)>time(o.observedAt) ||
+     time(evidence.availableAt)>time(o.observedAt))
+    throw new RangeError('a model published after its target signal cannot be treated as prospective likelihood');
   if (f.conditioning && f.conditioning.model !== model.evidenceId) throw new RangeError('multiple signals require one jointly calibrated model');
   if (evidence.value?.kind !== 'scenario-likelihood-model' || hashPosition(evidence.value.model) !== hashPosition(model.specification)) throw new TypeError('conditioning model differs from its observed evidence');
   const spec = model.specification;
