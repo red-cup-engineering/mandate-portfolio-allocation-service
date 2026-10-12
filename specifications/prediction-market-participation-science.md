@@ -178,3 +178,27 @@ A strategy can enter live operation only after independent receiving of a measur
 - EIA petroleum report schedule and holiday exceptions: https://www.eia.gov/petroleum/supply/weekly/schedule.php
 - Nonlinear/asymmetric oil-to-retail transmission (Journal of Commodity Markets 2026): https://www.sciencedirect.com/science/article/pii/S240585132600019X
 - Prior Kalshi experiments: forecasting-service/data/records/2026-10-03-kalshi-observable-progress/results/gas-daily.txt and gas-weekly.txt; forecasting-service/data/records/2026-10-04-belief-path/README.md.
+
+
+## Data rights and source licenses (2026-10-12 receiving)
+
+AAA's publicly displayed About page identifies OPIS as its daily upstream
+publisher but also explicitly restricts commercial use, exploitation and
+archiving of the website's content without authorization. The retained
+October 3–4 experiment is a historical code/evidence audit, **not** a
+commercial data entitlement or a standing authorization to expand its scraper.
+Do not activate a new automated commercial AAA scraping service based solely
+on the fact that its public website is reachable or was reachable earlier.
+
+Before putting AAA-derived values into a revenue-seeking automatic trading
+product, record the applicable source rights: an authorized AAA/OPIS license,
+another lawfully available licensed feed, or an independently generated dataset
+whose rights and coverage actually allow the intended use. Keep raw publisher
+copyright material within its authorized scope. A public official settlement
+label and an independently reproducible price predictor have different data
+and rights requirements. Observe Kalshi exchange market-data permissions too.
+
+Research code may still use synthetic fixtures, separately authorized
+source receipts and already-retained experimental summaries. No live AAA
+data acquisition, expanded scraper, purchased license or commercial
+redistribution was authorized or carried out in this work.
