@@ -344,3 +344,81 @@ was NOT a full Node/pnpm workspace or host-release test. Synthetic
 tests demonstrate conditional math, not independent receipt custody
 or empirical profitable gas fills. Live incentive credit, gas
 commercial-source rights and order admission remain independent gates.
+
+
+## October 12 Mathy Monday alignment: typed evidence through corporate receiving
+
+One formal claim is not one executable trade. The provider chain has five
+distinct responsibilities with separate sources and receivers:
+
+1. **Obsmetrologia**, owned by Lenticule Science, defines FOUR's knowledge
+   and truth orders, paraconsistent non-explosion, and modal reasoning.
+   Its existing Lean development owns these theorems. The source change
+   here adds NO new Lean theorem, nor does it invent a new FOUR enum.
+2. **Prediction-market science**, within Lenticule Gambling Science,
+   owns source precedence, target/settlement measurement identity,
+   point-in-time F_t evidence filtration and falsifiable independent
+   calibration. It consumes its prior selectSettlementEvidence:
+   an original publication is usable at t only if its received
+   availableAt timestamp is <= t. Higher-tier exact rules outrank
+   summaries, while same-tier conflict is retained.
+3. **Prediction-market engineering** owns conditional numerical payout
+   proof search, joint scenarios, fees/expected cash models and reusable
+   SignCell/SignChain projection. settlement-sign-evidence.mjs consumes
+   settlement-modal's deductions, constructs SignCell evidence pairs,
+   uses SignChain knowledgeJoin (not Boolean fusion), and addresses the
+   actual SignCell once per explicit source, rule, civil event date,
+   assumption, evidence channel and issuance time. Its sourceRelations
+   preserve which exact premise ID supports or opposes the proposition.
+   A source-conditional witness, a station proxy and a rate-model
+   counterfactual are NEVER merged into one authoritative proof.
+4. **Coesite prediction-market operations** independently verifies source
+   receipt custody, SignCell address, exact rule context, and every
+   sourceRelations witness against the original SignCraft causal journal.
+   An evidence ID is not automatically a journal EVENT ID: verify source
+   reference to event ID to SignCraft causes. Every Science source that
+   affected a conflict or precedence judgment is authenticated, not
+   merely whichever supports the final convenient conclusion. Without
+   externally supplied trusted verifiers, an apparent proof is NOT
+   received. This is a receiving ASSAY, not another graph database
+   or a claim of installed SignGraph runtime validation.
+5. **561 Group** owns the internal prediction-market service consumer,
+   reusing its existing Work Arena requirements/independent-receipt
+   evaluator, and a SEPARATE corporate Kalshi customer service.
+   The Kalshi customer additionally requires an authenticated
+   corporate principal and venue/account source receipt. A person,
+   Engineering's Kalshi provider, or Science's theory cannot silently
+   acquire the Group's treasury or order authority.
+
+Each scientific, engineering, operational and corporate section has
+one owner; Kalshi-specific specializations are downstream in their
+respective sections. The external Kalshi venue provider remains
+red-cup-engineering/kalshi-engineering-services-section; it is NOT
+copied into generic market engineering or 561 Group.
+
+**Invariants checked in source tests:**
+
+- compatible bounds can prove a necessary payout or rule out an
+  impossible payout; contradictory bounds retain both witnesses,
+  without proof by empty intersection or arbitrary consequence;
+- knowledge-order carrier and SignCell addressing survive permutation
+  and retain both evidence slots;
+- source/rules/date, proxy-vs-official channel and issuance timestamp
+  change the provenance identity or withholding outcome;
+- a source's observed event clock cannot replace its first received
+  availability clock;
+- the operational verifier checks every source influencing Science's
+  conclusion and every FOR/AGAINST proof edge, not a self-declared
+  authenticated: true field;
+- signed source/proof and independently delivered capability cannot
+  grant a venue order or corporate treasury mandate.
+
+The cross-owner source-level semantic suite exercised 20 numerical
+settlement tests, 12 shared SignCell projection tests, 10 existing
+Kalshi weather-modal tests, 8 Lenticule source-filtration tests,
+12 Coesite graph-receiving tests, and 11 Group/Kalshi customer tests.
+These use the actual numerical deductions and source-filter
+implementation; isolated tests substituted the exposed SignCell/
+SignChain interface. Full installed package tests, actual Lean proof
+replay, independent Semioverse/MetroPlat journal verification,
+and production deployed runtime are NOT proven by the source commits.
