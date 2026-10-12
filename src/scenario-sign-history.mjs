@@ -13,6 +13,7 @@ import {
   createHistory, historyHeads, historySection, observeHistory, validateHistory,
 } from '@red-cup-engineering/signcraft/history';
 import {relationGraphOfCells} from '@red-cup-engineering/signgraph/cell-graph';
+import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 
 const named=x=>typeof x==='string'&&x.trim().length>0;
 const instant=x=>typeof x==='string'&&
@@ -103,12 +104,7 @@ export function scenarioSourceReceiptCells(projection,sourceReceipts){
     if(Date.parse(r.availableAt)!==Date.parse(want.availableAt))
       throw new TypeError('source availability clock disagrees with its conditional proof');
   }
-  return Object.freeze([...byId.values()].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0)
-    .map(r=>cell(r.id,'prediction-market-source-receipt',{
-      kind:'prediction-market-source-receipt-v1',sourceRef:r.sourceRef,
-      issuer:r.issuer,sha256:r.sha256,
-      observedAt:r.observedAt,availableAt:r.availableAt,
-    },{for:[{kind:'source-custody-claim-v1',id:r.id,sha256:r.sha256}]})));
+  return sourceReceiptCellsOf([...byId.values()]);
 }
 
 function originalCellAt(h,proposal,{functional=false}={}){
@@ -186,6 +182,159 @@ export function composeConditionalScenarioHistory({
 
 
 /**
+ * One source-cell construction for the existing Bayesian and robust-action
+ * proof families. These cells assert byte-custody CLAIMS, not verification.
+ * The actual Operations reader must compare every declared SHA-256 to the
+ * separately fetched original byte stream and verify the issuer's authority.
+ */
+function sourceReceiptCellsOf(receipts){
+  return Object.freeze([...receipts].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0)
+    .map(r=>cell(r.id,'prediction-market-source-receipt',{
+      kind:'prediction-market-source-receipt-v1',sourceRef:r.sourceRef,
+      issuer:r.issuer,sha256:r.sha256,
+      observedAt:r.observedAt,availableAt:r.availableAt,
+    },{for:[{kind:'source-custody-claim-v1',id:r.id,sha256:r.sha256}]})));
+}
+function checkedSourceReceipts(premiseIds,at,receipts){
+  if(!Array.isArray(receipts)||receipts.length!==premiseIds.length)
+    throw new TypeError('exactly one original-byte receipt per conditional premise required');
+  const byId=new Map(),allowed=new Set(premiseIds);
+  for(const r of receipts){
+    if(!named(r?.id)||!allowed.has(r.id)||byId.has(r.id)||
+      !named(r.sourceRef)||!named(r.issuer)||!digest(r.sha256)||
+      !instant(r.observedAt)||!instant(r.availableAt)||
+      Date.parse(r.observedAt)>Date.parse(r.availableAt)||
+      Date.parse(r.availableAt)>Date.parse(at))
+      throw new TypeError('unique named premise receipt, authenticable digest and bounded absolute clocks required');
+    byId.set(r.id,r);
+  }
+  if(premiseIds.some(id=>!byId.has(id)))
+    throw new TypeError('source receipt omitted an inference predecessor');
+  return byId;
+}
+
+/**
+ * The bridge must replay the numerical argument, not merely accept a
+ * self-reported evaluation whose numbers resemble those in a SignCell.
+ * Reconstruct the SAME shared market-game scenario and fixed payoff menu
+ * from the complete inputs committed by the canonical SignCell address.
+ *
+ * This verifies conditional arithmetic and provenance integrity; it does
+ * not verify the empirical size of the assumed TV uncertainty ball.
+ */
+function requiredRobustProjection(p){
+  if(p?.kind!=='conditional-robust-action-sign-projection-v1'||
+    p.sourceAuthenticated!==false||p.radiusEmpiricallyVerified!==false||
+    p.tradeEligible!==false||p.orderEffect!==false||
+    !instant(p.at)||!named(p.address)||!p.cell||
+    address(p.cell)!==p.address||
+    p.cell.predicate!=='has-conditionally-derived-joint-scenario-robust-action-evaluation'||
+    !same(p.cell.object,p.context)||
+    !named(p.context?.source)||!named(p.context?.rules)||
+    !named(p.context?.scope)||!named(p.context?.assumption)||
+    p.context.condition!=='model-conditional-ambiguity-evaluation'||
+    p.context.inference!=='finite-joint-total-variation-action-evaluation'||
+    p.context.availableAt!==p.at||
+    !Array.isArray(p.cell.for)||p.cell.for.length!==1||
+    !Array.isArray(p.cell.against)||p.cell.against.length!==0||
+    p.cell.for[0]?.rule!=='finite-joint-total-variation-action-evaluation'||
+    p.cell.for[0]?.scope!=='conditional-on-unverified-predecision-calibration-radius'||
+    !Array.isArray(p.premiseIds)||p.premiseIds.length<2||
+    new Set(p.premiseIds).size!==p.premiseIds.length||
+    !p.premiseIds.every(named)||
+    !Array.isArray(p.sourceRelations)||p.sourceRelations.length!==1||
+    p.sourceRelations[0]?.side!=='for'||
+    p.sourceRelations[0]?.rule!==p.cell.for[0].rule||
+    !Array.isArray(p.sourceRelations[0]?.premises)||
+    !same([...p.sourceRelations[0].premises].sort(),[...p.premiseIds].sort())||
+    !same([...p.cell.for[0].premises].sort(),[...p.premiseIds].sort())||
+    p.evaluation?.kind!=='joint-scenario-conditional-ambiguity-evaluation-v1'||
+    p.evaluation.tradeEligible!==false||p.evaluation.orderEffect!==false||
+    p.evaluation.sourceAuthenticated!==false||
+    p.evaluation.radiusEmpiricallyVerified!==false)
+    throw new TypeError('complete native conditional robust SignCell, lineage and non-execution evidence required');
+  const c=p.context;
+  if(!named(c.forecastId)||c.forecastId!==p.cell.subject||
+    c.ambiguityConditionedOnForecastId!==c.forecastId||
+    !Array.isArray(c.forecastEvidenceIds)||
+    !c.forecastEvidenceIds.length||
+    c.forecastEvidenceIds.some(id=>!named(id))||
+    new Set(c.forecastEvidenceIds).size!==c.forecastEvidenceIds.length||
+    !Array.isArray(c.ambiguityEvidenceIds)||
+    !c.ambiguityEvidenceIds.length||
+    c.ambiguityEvidenceIds.some(id=>!named(id))||
+    new Set(c.ambiguityEvidenceIds).size!==c.ambiguityEvidenceIds.length||
+    !same([...c.forecastEvidenceIds].sort(),c.forecastEvidenceIds)||
+    !same([...c.ambiguityEvidenceIds].sort(),c.ambiguityEvidenceIds)||
+    !Array.isArray(c.priorScenarioWeights)||
+    !Array.isArray(c.actionPayoffVectors)||
+    !same([...new Set([c.forecastId,...c.forecastEvidenceIds,...c.ambiguityEvidenceIds])].sort(),
+      [...p.premiseIds].sort()))
+    throw new TypeError('complete source-linked joint prior and ambiguity identity required');
+  const forecast={
+    id:c.forecastId,observedAt:c.forecastObservedAt,
+    availableAt:c.forecastAvailableAt,horizon:c.forecastHorizon,
+    evidenceIds:c.forecastEvidenceIds,
+    scenarios:c.priorScenarioWeights.map(row=>({
+      id:row?.[0],probability:row?.[1],
+    })),
+  };
+  const ambiguity={
+    conditionedOnForecastId:c.ambiguityConditionedOnForecastId,
+    observedAt:c.ambiguityObservedAt,availableAt:c.ambiguityAvailableAt,
+    evidenceIds:c.ambiguityEvidenceIds,
+    totalVariationRadius:c.assumedTotalVariationRadius,
+  };
+  const actions=c.actionPayoffVectors.map(row=>({
+    id:row?.[0],
+    payoffsUsdByScenario:Object.fromEntries(row?.[1]??[]),
+  }));
+  const exact=evaluateJointScenarioAmbiguity({
+    forecast,actions,ambiguity,at:p.at,
+  });
+  const compact=(r)=>[...r.actionEvaluations]
+    .sort((a,b)=>a.id.localeCompare(b.id))
+    .map(a=>[a.id,a.nominalExpectedUsd,a.worstCaseExpectedUsd,
+      a.bestCaseExpectedUsd,a.worstCaseRegretUsd]);
+  if(p.evaluation.forecastId!==c.forecastId||
+    p.evaluation.at!==p.at||
+    !same([...p.evaluation.forecastEvidenceIds].sort(),c.forecastEvidenceIds)||
+    !same([...p.evaluation.ambiguityEvidenceIds].sort(),c.ambiguityEvidenceIds)||
+    !same([...p.evaluation.nominalScenarioProbabilities].sort((a,b)=>a[0].localeCompare(b[0])),
+      [...c.priorScenarioWeights].sort((a,b)=>a[0].localeCompare(b[0])))||
+    !same(compact(exact),compact(p.evaluation))||
+    !same(compact(exact),c.robustValues)||
+    exact.maximinExpectedPayoffAction!==p.evaluation.maximinExpectedPayoffAction||
+    exact.minimaxRegretAction!==p.evaluation.minimaxRegretAction||
+    exact.maximinExpectedPayoffAction!==c.maximinAction||
+    exact.minimaxRegretAction!==c.minimaxRegretAction)
+    throw new TypeError('independent receiving replay disagrees with conditional joint ambiguity proof');
+  return {forecast,ambiguity,actions,replayed:exact};
+}
+
+/**
+ * Reuse the existing prediction-market source SignCell representation for
+ * robust model-evidence premises. Every receipt is only a CLAIM here; its
+ * original bytes, issuer, scope and clock must be independently received by
+ * Operations before it can become a SignCraft predecessor.
+ */
+export function robustActionSourceReceiptCells(projection,sourceReceipts){
+  const {forecast,ambiguity}=requiredRobustProjection(projection);
+  const byId=checkedSourceReceipts(projection.premiseIds,projection.at,sourceReceipts);
+  const first=byId.get(forecast.id);
+  if(Date.parse(first.observedAt)!==Date.parse(forecast.observedAt)||
+    Date.parse(first.availableAt)!==Date.parse(forecast.availableAt))
+    throw new TypeError('original forecast receipt must match exact forecast observation and first-availability clocks');
+  for(const id of forecast.evidenceIds)
+    if(Date.parse(byId.get(id).availableAt)>Date.parse(forecast.observedAt))
+      throw new RangeError('forecast used evidence first available after model observation');
+  for(const id of ambiguity.evidenceIds)
+    if(Date.parse(byId.get(id).availableAt)>Date.parse(ambiguity.observedAt))
+      throw new RangeError('radius model used evidence first available after its observation');
+  return sourceReceiptCellsOf([...byId.values()]);
+}
+
+/**
  * Native SignCraft/SignGraph receiving bridge for the conditional joint
  * ambiguity proof. Reuses the existing source-receipt SignCell predicate.
  *
@@ -202,52 +351,8 @@ export function composeConditionalRobustActionHistory({
   source='prediction-market-joint-ambiguity-research',
 }={}){
   validateHistory(history);
-  if(!named(source)||projection?.kind!=='conditional-robust-action-sign-projection-v1'||
-    projection.sourceAuthenticated!==false||
-    projection.radiusEmpiricallyVerified!==false||
-    projection.tradeEligible!==false||projection.orderEffect!==false||
-    !instant(projection.at)||!named(projection.address)||
-    !projection.cell||address(projection.cell)!==projection.address||
-    projection.cell.predicate!==
-      'has-conditionally-derived-joint-scenario-robust-action-evaluation'||
-    !same(projection.cell.object,projection.context)||
-    projection.cell.subject!==projection.evaluation?.forecastId||
-    projection.evaluation?.kind!=='joint-scenario-conditional-ambiguity-evaluation-v1'||
-    projection.evaluation.at!==projection.at||
-    !Array.isArray(projection.premiseIds)||projection.premiseIds.length<2||
-    new Set(projection.premiseIds).size!==projection.premiseIds.length||
-    !projection.premiseIds.every(named)||
-    !Array.isArray(projection.cell.for)||projection.cell.for.length!==1||
-    !Array.isArray(projection.cell.against)||projection.cell.against.length!==0||
-    projection.cell.for[0]?.rule!=='finite-joint-total-variation-action-evaluation'||
-    !same([...projection.cell.for[0].premises].sort(),
-      [...projection.premiseIds].sort())||
-    !Array.isArray(projection.sourceRelations)||
-    projection.sourceRelations.length!==1||
-    projection.sourceRelations[0]?.side!=='for'||
-    projection.sourceRelations[0]?.rule!==projection.cell.for[0].rule||
-    !same([...projection.sourceRelations[0].premises].sort(),
-      [...projection.premiseIds].sort()))
-    throw new TypeError('complete received native conditional robust SignCell proof required');
-  const details=projection.context;
-  if(details.forecastId!==projection.cell.subject||
-    details.availableAt!==projection.at||
-    !instant(details.forecastAvailableAt)||
-    !instant(details.ambiguityObservedAt)||
-    !instant(details.ambiguityAvailableAt)||
-    Date.parse(details.forecastAvailableAt)>Date.parse(projection.at)||
-    Date.parse(details.ambiguityObservedAt)>Date.parse(details.ambiguityAvailableAt)||
-    Date.parse(details.ambiguityAvailableAt)>Date.parse(projection.at)||
-    details.assumedTotalVariationRadius!==
-      projection.evaluation.assumedTotalVariationRadius||
-    details.maximinAction!==projection.evaluation.maximinExpectedPayoffAction||
-    details.minimaxRegretAction!==projection.evaluation.minimaxRegretAction||
-    !same(details.robustValues,
-      [...projection.evaluation.actionEvaluations]
-        .sort((a,b)=>a.id.localeCompare(b.id))
-        .map(a=>[a.id,a.nominalExpectedUsd,a.worstCaseExpectedUsd,
-          a.bestCaseExpectedUsd,a.worstCaseRegretUsd])))
-    throw new TypeError('proof scope, evaluated joint values and source clocks disagree');
+  if(!named(source))throw new TypeError('named SignCraft source required');
+  requiredRobustProjection(projection);
 
   // The source/derived-model receipts are not signed by this library.
   // Reject missing or ambiguous custody instead of laundering assumed
@@ -265,9 +370,18 @@ export function composeConditionalRobustActionHistory({
       throw new TypeError('preexisting source receipt is incomplete or later than inference');
     return c;
   });
+  // A source-receipt cell with the right subject/object but invented support
+  // does not count as received original custody. Reconstruct and validate
+  // the exact cells using the SAME upstream source evidence carrier.
+  const verifiedShape=robustActionSourceReceiptCells(projection,
+    sources.map(c=>({id:c.subject,...c.object})));
+  if(!same(verifiedShape,sources))
+    throw new TypeError('existing source custody SignCells differ from the declared original-byte receipt shape');
+  // The SignCell names the original forecast as its subject; causal edges
+  // must target the NEW proof address, not form a self-loop on the forecast.
   const links=Object.freeze([...projection.premiseIds].sort()
     .map(id=>cell(id,'is-premise-of-conditional-robust-action-evaluation',
-      projection.cell.subject,{
+      projection.address,{
         for:[{kind:'conditional-inference-causal-reference-v1',
           rule:'finite-joint-total-variation-action-evaluation',
           proofAddress:projection.address,premiseId:id}],
