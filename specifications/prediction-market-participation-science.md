@@ -289,3 +289,58 @@ on future day clusters, and compare actual cash per attempted
 decision across maker, taker, LIP and structural policies.
 Data rights, source attribution and independent receiving
 are prerequisites; retrospective replay is not authority.
+
+
+## Receiving refinement: honest historical fill confidence and content identity
+
+The shared real-order fill evaluator now makes the full training-to-evaluation
+sequence explicit, not merely the fit:
+
+- A binary fill observation is EXACTLY one attempted contract, with either
+  zero or one contract actually filled and a terminal order outcome. Partial
+  fills, missing terminal receipts, ambiguous market results and multi-lot
+  executions do not masquerade as equivalent Bernoulli one-lot trials.
+- Training hashes now cover the actual win/loss and fill labels, source
+  receipt evidence and calibration parameters, not just potentially reused
+  receipt identifiers. Any changed outcome is a new research artifact.
+- scoreBinaryOutcomeFillHoldout validates a later independently received
+  settlement-day sample through the SAME source/receipt validation function.
+  The training data and earlier receipt dates are excluded; any reused
+  order/settlement receipt or pre-training quoted order is rejected.
+- The comparison is the paired day-weighted Brier advantage of
+  outcome-conditioned P(fill | eventual settlement) over the frozen
+  training-only unconditional fill baseline. Its one-sided Hoeffding
+  lower bound is exploratory and assumes independent, stable settlement
+  days, with no multiple-model search correction. This measures a
+  retrospective conditional hazard, NOT an ex-ante predictor of
+  tomorrow's settlement or fill.
+- bindScreenedOutcomeFillResearch is the ONLY shared bridge from an
+  earlier fit plus its later evaluation to a source-scoped conditional
+  hazard research input. It recomputes the day means, original confidence
+  radius and report identity, checks same source family/quote regime/side,
+  publication order, minimum support and strictly positive lower bound.
+  Failing studies remain withheld. Even a successful screening receipt
+  says tradeEligible:false; it does not authenticate the external source
+  journal or provide order credentials.
+- Kalshi's AAA participation adapter consumes that shared bridge when
+  a full fill study is supplied. It cannot mix the historical fit with
+  manually asserted fill parameters in one candidate; it still accepts
+  explicitly hypothetical source-scoped models for offline comparisons,
+  but never promotes them as measured.
+- The general Kalshi event-day parser has been moved to the existing
+  venue facts owner, with the weather implementation retaining only a
+  compatibility re-export. Gas joint scenario projections now require
+  the same actual target day named by that venue parser; wrong-day
+  forecasts are withheld even if their series and source population
+  happen to match.
+
+Source-level regression tests exercised 69 upstream scientific cases
+and 73 Kalshi composition cases, including the original coherence LP,
+Kalshi fee calculations, both outcome polarities, the new chronology
+and mathematically consistent synthetic positive/negative studies.
+The local JavaScript execution harness substituted deterministic
+hashing in place of the installed gaming package's hashPosition; it
+was NOT a full Node/pnpm workspace or host-release test. Synthetic
+tests demonstrate conditional math, not independent receipt custody
+or empirical profitable gas fills. Live incentive credit, gas
+commercial-source rights and order admission remain independent gates.
