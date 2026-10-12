@@ -287,6 +287,9 @@ function requiredRobustProjection(p){
     observedAt:c.ambiguityObservedAt,availableAt:c.ambiguityAvailableAt,
     evidenceIds:c.ambiguityEvidenceIds,
     totalVariationRadius:c.assumedTotalVariationRadius,
+    ...(Object.hasOwn(c,'assumedTailFraction')?{
+      tailFraction:c.assumedTailFraction,
+    }:{}),
   };
   const actions=c.actionPayoffVectors.map(row=>({
     id:row?.[0],
@@ -298,7 +301,10 @@ function requiredRobustProjection(p){
   const compact=(r)=>[...r.actionEvaluations]
     .sort((a,b)=>a.id.localeCompare(b.id))
     .map(a=>[a.id,a.nominalExpectedUsd,a.worstCaseExpectedUsd,
-      a.bestCaseExpectedUsd,a.worstCaseRegretUsd]);
+      a.bestCaseExpectedUsd,a.worstCaseRegretUsd,
+      ...(r.tailFraction!==undefined?[
+        a.nominalExpectedShortfallUsd,a.worstCaseExpectedShortfallUsd,
+      ]:[])]);
   if(p.evaluation.forecastId!==c.forecastId||
     p.evaluation.at!==p.at||
     !same([...p.evaluation.forecastEvidenceIds].sort(),c.forecastEvidenceIds)||
@@ -310,7 +316,10 @@ function requiredRobustProjection(p){
     exact.maximinExpectedPayoffAction!==p.evaluation.maximinExpectedPayoffAction||
     exact.minimaxRegretAction!==p.evaluation.minimaxRegretAction||
     exact.maximinExpectedPayoffAction!==c.maximinAction||
-    exact.minimaxRegretAction!==c.minimaxRegretAction)
+    exact.minimaxRegretAction!==c.minimaxRegretAction||
+    exact.tailFraction!==p.evaluation.tailFraction||
+    exact.minWorstExpectedShortfallAction!==p.evaluation.minWorstExpectedShortfallAction||
+    exact.minWorstExpectedShortfallAction!==c.minWorstExpectedShortfallAction)
     throw new TypeError('independent receiving replay disagrees with conditional joint ambiguity proof');
   return {forecast,ambiguity,actions,replayed:exact};
 }

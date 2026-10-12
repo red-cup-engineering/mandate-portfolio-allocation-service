@@ -199,6 +199,10 @@ export function projectConditionalRobustActionSign({
     ambiguityAvailableAt:ambiguity.availableAt,
     ambiguityEvidenceIds:[...ambiguity.evidenceIds].sort(),
     assumedTotalVariationRadius:result.assumedTotalVariationRadius,
+    ...(result.tailFraction!==undefined?{
+      assumedTailFraction:result.tailFraction,
+      minWorstExpectedShortfallAction:result.minWorstExpectedShortfallAction,
+    }:{}),
     // All actual scenario weights and action payoffs belong to the address.
     priorScenarioWeights:scenarioIds.map(id=>[
       id,forecast.scenarios.find(s=>s.id===id).probability,
@@ -208,7 +212,10 @@ export function projectConditionalRobustActionSign({
     robustValues:[...result.actionEvaluations]
       .sort((a,b)=>a.id.localeCompare(b.id))
       .map(a=>[a.id,a.nominalExpectedUsd,a.worstCaseExpectedUsd,
-        a.bestCaseExpectedUsd,a.worstCaseRegretUsd]),
+        a.bestCaseExpectedUsd,a.worstCaseRegretUsd,
+        ...(result.tailFraction!==undefined?[
+          a.nominalExpectedShortfallUsd,a.worstCaseExpectedShortfallUsd,
+        ]:[])]),
     maximinAction:result.maximinExpectedPayoffAction,
     minimaxRegretAction:result.minimaxRegretAction,
   };

@@ -134,3 +134,35 @@ test('a changed scenario payoff, posterior assumption or action list changes the
   history:staged(a),projection:polluted,
  }),/conditional robust SignCell/);
 });
+
+
+test('optional joint downside tail-risk preference and values are part of the canonical SignCell proof',()=>{
+ const p=projectConditionalRobustActionSign({
+  forecast:forecast(),ambiguity:{...ambiguity(),tailFraction:.8},
+  actions:actions(),at,
+  context:{source:'mixed-qualified-study',rules:'joint-source-rule-v1',
+    scope:'cross-venue-fixed-actions',assumption:'hypothetical TV radius and tail preference'},
+ });
+ const q=projectConditionalRobustActionSign({
+  forecast:forecast(),ambiguity:ambiguity(),
+  actions:actions(),at,
+  context:{source:'mixed-qualified-study',rules:'joint-source-rule-v1',
+    scope:'cross-venue-fixed-actions',assumption:'hypothetical TV radius and tail preference'},
+ });
+ assert.notEqual(p.address,q.address);
+ assert.equal(p.context.assumedTailFraction,.8);
+ assert.equal(p.context.minWorstExpectedShortfallAction,'abstain');
+ assert.ok(p.context.robustValues.every(row=>row.length===7));
+ const result=composeConditionalRobustActionHistory({
+  history:staged(p),projection:p,
+ });
+ assert.equal(result.status,'composed');
+ assert.equal(result.tradeEligible,false);
+ const forged={...p,evaluation:{...p.evaluation,
+   actionEvaluations:p.evaluation.actionEvaluations.map(row=>({...row})),
+ }};
+ forged.evaluation.actionEvaluations[1].worstCaseExpectedShortfallUsd+=.5;
+ assert.throws(()=>composeConditionalRobustActionHistory({
+  history:staged(p),projection:forged,
+ }),/replay disagrees/);
+});

@@ -193,3 +193,64 @@ test('greedy TV extremal values are monotonic in the ambiguity radius',()=>{
     previousBest=a.bestCaseExpectedUsd;
   }
 });
+
+
+test('coherent joint downside expected shortfall uses probability mass, not scenario count',()=>{
+  const r=evaluate({ambiguity:{...ambiguity(),tailFraction:.8}});
+  const x=action(r,'alpaca-long');
+  near(x.nominalExpectedShortfallUsd,-.125);
+  near(x.worstCaseExpectedShortfallUsd,.625);
+  near(action(r,'kalshi-no').worstCaseExpectedShortfallUsd,.625);
+  near(action(r,'abstain').worstCaseExpectedShortfallUsd,0);
+  assert.equal(r.tailFraction,.8);
+  assert.equal(r.minWorstExpectedShortfallAction,'abstain');
+  assert.equal(r.radiusEmpiricallyVerified,false);
+  assert.equal(r.tradeEligible,false);
+  assert.equal(r.orderEffect,false);
+});
+
+test('full-mass expected shortfall is negative expected payoff under the same TV ball',()=>{
+  const r=evaluate({ambiguity:{...ambiguity(),tailFraction:1}});
+  for(const row of r.actionEvaluations){
+    near(row.nominalExpectedShortfallUsd,-row.nominalExpectedUsd);
+    near(row.worstCaseExpectedShortfallUsd,-row.worstCaseExpectedUsd);
+  }
+});
+
+test('zero TV radius gives nominal tail loss; a rare adverse world can enter the assumed ambiguity ball',()=>{
+  const f={...forecast(),scenarios:[
+    {id:'up',probability:1},{id:'down',probability:0},
+  ]};
+  const none=evaluate({forecast:f,ambiguity:{...ambiguity(),tailFraction:.1,totalVariationRadius:0}});
+  near(action(none,'alpaca-long').nominalExpectedShortfallUsd,-2);
+  near(action(none,'alpaca-long').worstCaseExpectedShortfallUsd,-2);
+  const stress=evaluate({forecast:f,ambiguity:{...ambiguity(),tailFraction:.1,totalVariationRadius:.2}});
+  near(action(stress,'alpaca-long').worstCaseExpectedShortfallUsd,1);
+  assert.equal(stress.minWorstExpectedShortfallAction,'abstain');
+});
+
+test('tail loss respects each world mass under reordered and unequal scenarios',()=>{
+  const f={...forecast(),scenarios:[
+    {id:'up',probability:.6},{id:'down',probability:.4},
+  ]};
+  const r=evaluate({forecast:f,ambiguity:{...ambiguity(),tailFraction:.5,totalVariationRadius:.2}});
+  const x=action(r,'alpaca-long');
+  near(x.nominalExpectedShortfallUsd,.4);
+  near(x.worstCaseExpectedShortfallUsd,1);
+  const flipped=evaluate({
+    forecast:{...f,scenarios:[...f.scenarios].reverse()},
+    actions:[...actions()].reverse(),
+    ambiguity:{...ambiguity(),tailFraction:.5,totalVariationRadius:.2},
+  });
+  near(action(flipped,'alpaca-long').worstCaseExpectedShortfallUsd,x.worstCaseExpectedShortfallUsd);
+  assert.equal(flipped.minWorstExpectedShortfallAction,r.minWorstExpectedShortfallAction);
+});
+
+test('tail fractions outside the finite-precision research domain fail rather than imply precision',()=>{
+  for(const fraction of [0,-.1,1.1,NaN,Infinity,null,1e-10]){
+    assert.throws(()=>evaluate({ambiguity:{...ambiguity(),tailFraction:fraction}}),TypeError);
+  }
+  const ordinary=evaluate();
+  assert.equal(ordinary.tailFraction,undefined);
+  assert.ok(ordinary.actionEvaluations.every(x=>!Object.hasOwn(x,'worstCaseExpectedShortfallUsd')));
+});

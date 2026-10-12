@@ -165,6 +165,36 @@ epsilon, it calculates for each feasible action a:
 - a conditional maximin-expected-payoff action and a minimax-regret action,
   which **may be different** and have no implied execution authority.
 
+The same operator also supports an **optional coherent downside-tail
+assessment** without introducing another venue model or risk carrier.
+Supply a research preference \`ambiguity.tailFraction\` in the bounded
+finite-precision range \`[1e-6, 1]\` to measure the average **net USD loss**
+\(-U(a,S)\) over the worst fraction \(\tau\) of the single joint probability
+law (expected shortfall, commonly called CVaR). The boundary scenario is
+included fractionally according to its probability mass—not by the number
+of scenario rows. For each action, the existing output adds both nominal
+and **maximum total-variation-conditional expected shortfall** and names
+the lowest-worst-tail-loss action in the exact same feasible menu, including
+abstention.
+
+The same probability transfer that minimizes expected payoff moves mass
+from smaller losses to larger losses. In the finite common scenario order,
+it first-order stochastically dominates alternative laws in the declared
+TV ball, so the resulting distribution also maximizes upper-tail expected
+loss; no second optimizer or per-venue marginal distribution is required.
+At \(\tau=1\), its result agrees with minus the corresponding expected
+payoff, which provides an additional numerical consistency check.
+
+This is a conditional, single-horizon tail *loss* calculation. It does not
+constrain pathwise drawdown, slippage beyond the supplied payoff vectors,
+margin availability, liquidation paths not represented in the scenarios,
+or multi-period Kelly/log-growth. The tail fraction is a chosen risk
+preference, not a measured confidence level, and the TV radius remains
+scientifically unverified until independently calibrated. The optional
+fraction, selected action and all actual tail values are committed into the
+**same** SignCell canonical address and independently recalculated before
+SignCraft receiving; an old address cannot borrow a new tail-risk result.
+
 The finite-simplex extremum is obtained by transferring up to epsilon
 probability from states with larger payoffs to those with smaller payoffs.
 Its returned extremal scenario vectors can be independently checked.
@@ -181,7 +211,7 @@ node apps/market-information.mjs robust examples/joint-ambiguity.json
 A real packet must supply the existing shared `forecast`, a fixed `actions` menu including
 exact zero-payoff abstention, decision time `at`, and an `ambiguity`
 record naming the exact `conditionedOnForecastId`, original observation
-and availability clocks, source evidence IDs, and `totalVariationRadius`.
+and availability clocks, source evidence IDs, and `totalVariationRadius` (optionally `tailFraction`).
 The included example is deliberately **synthetic**, not calibrated market
 evidence or a proposed funded trade. A numerical radius is a caller premise,
 never a statistical coverage guarantee manufactured by the optimizer.

@@ -86,11 +86,40 @@ function extremize(p,payoffs,radius,minimize){
 }
 
 /**
+ * One coherent downside-risk reading over the SAME joint worlds: upper-tail
+ * expected shortfall of loss = -net payoff. Positive means a loss; negative
+ * means the worst selected fraction of worlds still earns money.
+ *
+ * Fraction τ refers to probability MASS (not a number of scenario rows).
+ * Partial inclusion of the boundary world makes the finite calculation
+ * invariant under scenario refinement and permutations. There is no
+ * independent Kalshi/Alpaca/GMX marginal tail law here.
+ */
+function expectedShortfallOfLoss(probabilities,payoffs,tailFraction){
+  const weighted=payoffs.map((payoff,i)=>({
+    probability:probabilities[i],loss:-payoff,i,
+  })).sort((a,b)=>b.loss-a.loss||a.i-b.i);
+  const total=sum(probabilities),target=tailFraction*total;
+  if(!(total>0)||!(target>0))throw new RangeError('tail-risk probability mass not positive');
+  let remaining=target;
+  const terms=[];
+  for(const w of weighted){
+    if(remaining<=0)break;
+    const taken=Math.min(remaining,w.probability);
+    terms.push(taken*w.loss);
+    remaining-=taken;
+  }
+  if(remaining>1e-12)throw new RangeError('incomplete joint probability mass for downside tail');
+  return sum(terms)/target;
+}
+
+/**
  * actions reuse the same fixed menu as market-information-value:
  * [{id, payoffsUsdByScenario:{scenarioId:finiteUsd}}].
  *
  * ambiguity = {conditionedOnForecastId, observedAt, availableAt,
- *              evidenceIds:[...], totalVariationRadius:[0,1]}.
+ *              evidenceIds:[...], totalVariationRadius:[0,1],
+ *              tailFraction?:[1e-6,1]}.
  * Independent receiving must establish that this radius is empirically
  * warranted; the operator only proves what follows if it is.
  */
@@ -114,8 +143,11 @@ export function evaluateJointScenarioAmbiguity({forecast,actions,ambiguity,at}={
     ambiguity.evidenceIds.some(id=>!named(id))||
     new Set(ambiguity.evidenceIds).size!==ambiguity.evidenceIds.length||
     !finite(ambiguity.totalVariationRadius)||
-    ambiguity.totalVariationRadius<0||ambiguity.totalVariationRadius>1)
-    throw new TypeError('pre-decision, source-linked conditional total-variation radius required');
+    ambiguity.totalVariationRadius<0||ambiguity.totalVariationRadius>1||
+    (ambiguity.tailFraction!==undefined&&
+      (!finite(ambiguity.tailFraction)||
+        ambiguity.tailFraction<1e-6||ambiguity.tailFraction>1)))
+    throw new TypeError('pre-decision, source-linked TV radius and bounded optional downside tail fraction required');
   if(!Array.isArray(actions)||actions.length<1||actions.length>64)
     throw new TypeError('bounded, fixed candidate action menu required');
 
@@ -149,6 +181,8 @@ export function evaluateJointScenarioAmbiguity({forecast,actions,ambiguity,at}={
     throw new TypeError('exact zero-payoff abstention must be a real feasible action');
 
   const radius=ambiguity.totalVariationRadius;
+  const hasTail=ambiguity.tailFraction!==undefined;
+  const tailFraction=ambiguity.tailFraction;
   const rows=menu.map(a=>{
     const low=extremize(p,a.payoffs,radius,true);
     const high=extremize(p,a.payoffs,radius,false);
@@ -160,6 +194,14 @@ export function evaluateJointScenarioAmbiguity({forecast,actions,ambiguity,at}={
       worstCaseExpectedUsd:low.expectedUsd,
       bestCaseExpectedUsd:high.expectedUsd,
       worstCaseRegretUsd:regret,
+      ...(hasTail?{
+        nominalExpectedShortfallUsd:expectedShortfallOfLoss(p,a.payoffs,tailFraction),
+        // The lower-payoff TV transport is the same globally worst LOSS
+        // distribution for every increasing loss transform. Consequently
+        // it also maximizes the tail loss under this fixed ambiguity ball.
+        worstCaseExpectedShortfallUsd:expectedShortfallOfLoss(
+          low.probabilities,a.payoffs,tailFraction),
+      }:{}),
       // An independently receiving agent can check that the optimizer
       // respected this EXACT joint law and the declared ambiguity radius.
       worstCaseScenarioProbabilities:ids.map((id,i)=>[id,low.probabilities[i]]),
@@ -172,6 +214,9 @@ export function evaluateJointScenarioAmbiguity({forecast,actions,ambiguity,at}={
     a.id.localeCompare(b.id));
   const byRegret=[...rows].sort((a,b)=>a.worstCaseRegretUsd-b.worstCaseRegretUsd||
     b.worstCaseExpectedUsd-a.worstCaseExpectedUsd||a.id.localeCompare(b.id));
+  const byTail=hasTail?[...rows].sort((a,b)=>
+    a.worstCaseExpectedShortfallUsd-b.worstCaseExpectedShortfallUsd||
+    b.worstCaseExpectedUsd-a.worstCaseExpectedUsd||a.id.localeCompare(b.id)):null;
   return Object.freeze({
     kind:'joint-scenario-conditional-ambiguity-evaluation-v1',
     forecastId:forecast.id,at,
@@ -182,6 +227,11 @@ export function evaluateJointScenarioAmbiguity({forecast,actions,ambiguity,at}={
     actionEvaluations:rows,
     maximinExpectedPayoffAction:byWorst[0].id,
     minimaxRegretAction:byRegret[0].id,
+    ...(hasTail?{
+      tailFraction,
+      minWorstExpectedShortfallAction:byTail[0].id,
+      tailRiskInterpretation:'upper-tail expected loss over the same finite joint law and assumed TV ball; preference is conditional, not calibrated',
+    }:{}),
     interpretation:'conditional total-variation robustness over the original finite joint scenarios',
     radiusEmpiricallyVerified:false,
     sourceAuthenticated:false,

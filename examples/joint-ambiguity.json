@@ -71,7 +71,8 @@
     "evidenceIds": [
       "synthetic-not-calibrated-total-variation-radius"
     ],
-    "totalVariationRadius": 0.15
+    "totalVariationRadius": 0.15,
+    "tailFraction": 0.1
   },
   "at": "2026-10-12T20:00:00Z"
 }
