@@ -5,6 +5,7 @@
 import { gameRules, hashPosition } from '@red-cup-engineering/gaming/running/rules';
 import { jointKellyForScenarioReturns } from '@red-cup-engineering/position-sizing-service';
 import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
+import {assessExecutableBook} from './executable-book.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -258,6 +259,9 @@ function countedLossRecord(record) {
 export function planMarket(state, policy, at) {
   if (!policy || !Number.isSafeInteger(policy.minCalibrationSamples) || policy.minCalibrationSamples < 1) throw new TypeError('positive calibration sample minimum required');
   for (const field of ['maxDeployFraction', 'maxInstrumentFraction', 'maxScenarioLossFraction']) if (!(finite(policy[field], field) > 0) || policy[field] > 1) throw new RangeError(`${field} must be in (0,1]`);
+  if(policy.requireExecutableBook!==undefined&&
+     typeof policy.requireExecutableBook!=='boolean')
+    throw new TypeError('boolean executable-book requirement required');
   const now = time(at); const f = state.forecast;
   const maxAge = nonnegative(policy.maxObservationAgeMs, 'observation age');
   const fresh = (row) => row && time(row.observedAt) <= now && now - time(row.observedAt) <= maxAge;
@@ -296,6 +300,34 @@ export function planMarket(state, policy, at) {
       if (!payoffScopes.some(scope=>holdingPeriodMs>=scope.minHoldingPeriodMs&&holdingPeriodMs<=scope.maxHoldingPeriodMs&&hashPosition(scope.target)===hashPosition(payoffTarget(q)))) { refuse('candidate differs from the scored payoff scope or holding period'); continue; }
       if (q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
       if (q.stale || q.availableUnits < q.unitStep) { refuse('no known executable liquidity'); continue; }
+      // One operational book, one real consumed unit. Do not let a speculative
+      // historical edge borrow an old or crossed current ask. This checks only
+      // the already-quoted side; the venue adapter remains the execution owner.
+      if(policy.requireExecutableBook&&!q.book){
+        refuse('current executable side-specific bid/ask required');continue;
+      }
+      let quotedCapacity=q.availableUnits;
+      if(q.book){
+        if(typeof q.book.sourceObservationId!=='string'||
+           !q.book.sourceObservationId.trim()||
+           !evidenceOK([q.book.sourceObservationId])){
+          refuse('side-specific book has no available original observation');continue;
+        }
+        if(q.book.venue!==q.venue||q.book.instrument!==q.instrument||
+           q.book.side!==q.side){
+          refuse('execution book belongs to another market side or venue');continue;
+        }
+        const quality=assessExecutableBook({
+          book:q.book,at,
+          maxQuoteAgeMs:Math.min(maxAge,policy.maxExecutableBookAgeMs??60000),
+          maxRelativeSpread:policy.maxRelativeSpread??0.005,
+          minUnits:q.unitStep,proposedEntryPrice:q.entryPrice,
+        });
+        if(!quality.eligibleForPlanning){
+          refuse(quality.reason);continue;
+        }
+        quotedCapacity=Math.min(quotedCapacity,quality.maxDisplayedUnits);
+      }
       if (q.venue === 'alpaca' && !['us_equity', 'crypto'].includes(q.assetClass)) { refuse('Alpaca asset class required'); continue; }
       if (seen.has(id)) { refuse('same liquidity already claimed by another strategy'); continue; }
       if (q.venue === 'evm') {
@@ -331,7 +363,7 @@ export function planMarket(state, policy, at) {
         const spent = q.funding ? fundingUnitsPerUnit * nonnegative(s.fundingValues?.[q.funding.instrument], `scenario ${s.id} funding value ${q.funding.instrument}`) : capitalPerUnit;
         return (payout - spent) / capitalPerUnit;
       });
-      seen.add(id); candidates.push({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns, lossRate });
+      seen.add(id); candidates.push({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns, lossRate, quotedCapacity });
     }
   }
   const constraints = [];
@@ -342,8 +374,8 @@ export function planMarket(state, policy, at) {
       add(candidates.map(({ q, capitalPerUnit, fundingUnitsPerUnit }) => q.venue === account.venue && q.funding?.instrument === instrument ? fundingUnitsPerUnit * equity / (capitalPerUnit * 100) : 0), holding.availableUnits);
     }
   }
-  for (const [i, { q, capitalPerUnit }] of candidates.entries()) {
-    const cap = Math.min(nonnegative(policy.maxInstrumentFraction, 'instrument cap'), q.availableUnits * capitalPerUnit * 100 / equity);
+  for (const [i, { q, capitalPerUnit, quotedCapacity }] of candidates.entries()) {
+    const cap = Math.min(nonnegative(policy.maxInstrumentFraction, 'instrument cap'), quotedCapacity * capitalPerUnit * 100 / equity);
     add(candidates.map((_, j) => Number(i === j)), cap);
   }
   for (const [factor, cap] of Object.entries(policy.factorCaps ?? {})) {

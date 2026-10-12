@@ -96,3 +96,42 @@ test('a strategy naming loss-rate evidence must carry it among its evidence', ()
   let s = marketGame.initialPosition();
   assert.throws(() => marketGame.extend(s, { kind: 'strategy', strategy: { id: 'x', observedAt: at, quoteIds: [], evidenceIds: ['other'], lossRateEvidence: 'rec', thesis: 't', falsifier: 'f' } }), /among the strategy evidence/u);
 });
+
+
+test('the funded market planner acts on usable side-specific bid/ask liquidity, not the modelled fantasy quote',()=>{
+ const g=brierGame();
+ const p={...g.policy,requireExecutableBook:true,maxExecutableBookAgeMs:30_000,maxRelativeSpread:.005};
+ const without=planMarket(g.s,p,g.at);
+ assert.equal(without.orders.length,0);
+ assert.ok(without.skips.some(row=>/bid\/ask required/.test(row.reason)));
+ const book={
+  sourceRef:'fixture:external-kalshi-book',sourceObservationId:'book-source',
+  venue:'kalshi',instrument:'KX-TEST',side:'yes',
+  observedAt:g.at,bid:.249,ask:.25,bidSize:100,askSize:100,
+ };
+ const base={...g.s,
+  observations:{...g.s.observations,
+   'book-source':{observedAt:g.at,availableAt:g.at,value:{kind:'original-market-book',book}}},
+  quotes:{...g.s.quotes,kq:{...g.s.quotes.kq,book}},
+ };
+ const accepted=planMarket(base,p,g.at);
+ const order=accepted.orders.find(row=>row.id==='kq');
+ assert.ok(order,'a genuine fresh quoted side should remain an admissible candidate');
+ assert.ok(order.units<=book.askSize,'same-price displayed liquidity caps the actual planned quantity');
+ const changed=(patch,policy=p)=>{
+  const next={...base,quotes:{...base.quotes,kq:{...base.quotes.kq,book:{...book,...patch}}}};
+  return planMarket(next,policy,g.at);
+ };
+ for(const [patch,reason] of [
+  [{bid:.1},/spread/],
+  [{instrument:'DIFFERENT'},/another market side/],
+  [{sourceObservationId:'absent'},/original observation/],
+  [{ask:.26},/improves on ask/],
+  [{askSize:.1},/liquidity/],
+  [{observedAt:'2026-10-10T14:59:00Z'},/stale/],
+ ]){
+  const d=changed(patch);
+  assert.equal(d.orders.length,0);
+  assert.ok(d.skips.some(row=>reason.test(row.reason)),JSON.stringify(d.skips));
+ }
+});
