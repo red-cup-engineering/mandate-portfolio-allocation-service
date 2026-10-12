@@ -8,6 +8,7 @@ import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 import {assessExecutableBook} from './executable-book.mjs';
 import { principalVenueKey, assertAccountChainScope, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
 import { marketSideKey, assertFleetBookCapacity, apportionFleetBookDemand } from './fleet-liquidity-border.mjs';
+import {classifyMarketOutcome} from './outcome-evidence-border.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -103,7 +104,10 @@ function extend(state, move) {
     case 'outcome': {
       const row = move.outcome; const d = state.decisions[row.decisionId];
       if (!d || !d.orders.some((o) => o.id === row.orderId)) throw new TypeError('outcome must reference a planned order');
-      name(row.id); name(row.receipt); time(row.observedAt); finite(row.pnlCents, 'realized P&L');
+      name(row.id); name(row.receipt);
+      classifyMarketOutcome({outcome:row,decision:d,
+        order:d.orders.find(o=>o.id===row.orderId),
+        sourceObservation:state.observations[row.sourceObservationId]});
       if (state.outcomes[row.id] && hashPosition(state.outcomes[row.id]) !== hashPosition(row)) throw new RangeError('outcome identity reused');
       if (Object.values(state.outcomes).some((o) => o.id !== row.id && o.receipt === row.receipt)) throw new RangeError('receipt already counted as an outcome');
       next = { ...state, outcomes: { ...state.outcomes, [row.id]: row } }; break;
@@ -175,13 +179,37 @@ export function lossRateUpperBound(losses, trials, alpha = 0.05) {
   return hi;
 }
 
-/** Measure outcomes from receipts; an unfilled proposal contributes no win. */
-export function strategyPerformance(state) {
-  const by = {};
+/**
+ * Point-in-time conditional reading, NOT a scored financial outcome.
+ * A named receipt is merely a claim. Even a source-linked observation is
+ * NOT proof of issuer authenticity or independently checked source bytes.
+ * Never emit it in the measured return fields before external receiving.
+ */
+export function strategyPerformance(state, asOf) {
+  const cutoff = time(asOf), by = {};
   for (const row of Object.values(state.outcomes)) {
-    const order = state.decisions[row.decisionId].orders.find((o) => o.id === row.orderId);
-    const s = by[order.strategy] ??= { observations: 0, pnlCents: 0 };
-    s.observations += 1; s.pnlCents += row.pnlCents;
+    if (time(row.observedAt) > cutoff) continue;
+    const decision = state.decisions[row.decisionId];
+    const order = decision?.orders.find(o=>o.id===row.orderId);
+    if(!order)throw new TypeError('performance requires a planned source order');
+    const reading = classifyMarketOutcome({outcome:row,decision,order,
+      sourceObservation:state.observations[row.sourceObservationId]});
+    const s = by[order.strategy] ??= {
+      observations:0,pnlCents:null,
+      unverifiedClaims:0,unverifiedClaimedPnlCents:0,
+      sourceLinkedClaims:0,sourceLinkedClaimedPnlCents:0,
+      sourceAuthenticated:false,independentlyReconciled:false,
+    };
+    s.unverifiedClaims++;
+    s.unverifiedClaimedPnlCents += row.pnlCents;
+    if (!Number.isSafeInteger(s.unverifiedClaimedPnlCents))
+      throw new RangeError('claimed financial total exceeds safe integer cents');
+    if (reading.status === 'source-linked-claim') {
+      s.sourceLinkedClaims++;
+      s.sourceLinkedClaimedPnlCents += reading.pnlCents;
+      if (!Number.isSafeInteger(s.sourceLinkedClaimedPnlCents))
+        throw new RangeError('source-linked financial total exceeds safe integer cents');
+    }
   }
   return by;
 }
@@ -439,7 +467,7 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
   if (constraints.some(({ coefficients: a, cap }) => a.reduce((s, x, i) => s + x * fractions[i], 0) > cap + 1e-9)) throw new RangeError('discrete quantities breach joint limits');
   const body = { type: 'MarketGameDecision', principal, at, position: hashPosition(state), forecast: f.id, horizon: f.horizon, orders, skips, equityCents: equity,
     scenarioWealth: f.scenarios.map((s, k) => ({ id: s.id, probability: s.probability, wealth: baseline[k] + candidates.reduce((sum, c, i) => sum + c.returns[k] * fractions[i], 0) })),
-    sizing: { converged: sized.converged, kktResidual: sized.kktResidual }, performance: strategyPerformance(state),
+    sizing: { converged: sized.converged, kktResidual: sized.kktResidual }, performance: strategyPerformance(state, at),
     ...(sideCapacityLimits === null ? {} : { clearing: {
       kind: 'fleet-proportional-integer-book-clearing-v1',
       marketSideCapacityLimits: Object.fromEntries(Object.entries(sideCapacityLimits)

@@ -1,7 +1,7 @@
 import {hashPosition} from '@red-cup-engineering/gaming/running/rules';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {planMarket,planFleet,marketGame,allocationsFor} from '../src/market-game.mjs';
+import {planMarket,planFleet,marketGame,allocationsFor,strategyPerformance} from '../src/market-game.mjs';
 import {formAggressivePortfolioIntent} from '../../alpha-portfolio-order-intent-service/src/aggressive-intent.mjs';
 import {validateExecutionRequest} from '../../brokerage-execution-transport-service/src/execute-intent.mjs';
 const at='2026-10-07T02:00:00Z',horizon='2026-10-08T02:00:00Z';
@@ -262,4 +262,54 @@ test('one principal cannot consume a shared quote twice through independent alia
   for(const world of s.forecast.scenarios) world.values.asset2=world.values.asset;
   const result=planMarket(s,personalPolicy,at);
   assert.ok(result.orders.reduce((n,o)=>n+o.units,0)<=2+1e-9);
+});
+
+
+test('market performance keeps historical outcome assertions separate from source-bound claims',()=>{
+ const start=state();
+ const decision=planMarket(start,policy,at);
+ start.decisions[decision.id]=decision;
+ const claim={
+  id:'claim-only',decisionId:decision.id,orderId:'swap',receipt:'synthetic-claimed-event',
+  observedAt:'2026-10-08T04:00:00Z',pnlCents:10,
+ };
+ const afterClaim=marketGame.extend(start,{kind:'outcome',outcome:claim}).state;
+ assert.deepEqual(strategyPerformance(afterClaim,'2026-10-08T00:00:00Z'),{},
+  'future outcomes cannot leak into a prior decision');
+ const bucket=strategyPerformance(afterClaim,'2026-10-09T00:00:00Z').hedge;
+ assert.equal(bucket.observations,0);
+ assert.equal(bucket.pnlCents,null);
+ assert.equal(bucket.unverifiedClaims,1);
+ assert.equal(bucket.sourceLinkedClaims,0);
+ const observed={
+  id:'observed-venue-event',
+  source:'urn:synthetic:source-check',
+  observedAt:'2026-10-08T03:00:00Z',
+  availableAt:'2026-10-08T02:30:00Z',
+  value:{
+    kind:'venue-realized-pnl-v1',
+    decisionId:decision.id,orderId:'swap',principal:policy.principal,
+    venue:'evm',instrument:'USDC',receipt:'source-linked-claimed-event',
+    currency:'USD',pnlCents:25,sourceDigest:'sha256:'+'b'.repeat(64),
+  },
+ };
+ const withSource=marketGame.extend(afterClaim,{kind:'observe',observation:observed}).state;
+ const sourceLinked={
+  id:'conditional-source-claim',decisionId:decision.id,orderId:'swap',
+  receipt:'source-linked-claimed-event',
+  sourceObservationId:observed.id,
+  observedAt:'2026-10-08T04:00:00Z',pnlCents:25,
+ };
+ const combined=marketGame.extend(withSource,{kind:'outcome',outcome:sourceLinked}).state;
+ const results=strategyPerformance(combined,'2026-10-09T00:00:00Z').hedge;
+ assert.equal(results.unverifiedClaims,2);
+ assert.equal(results.unverifiedClaimedPnlCents,35);
+ assert.equal(results.sourceLinkedClaims,1);
+ assert.equal(results.sourceLinkedClaimedPnlCents,25);
+ assert.equal(results.pnlCents,null);
+ assert.equal(results.sourceAuthenticated,false);
+ assert.throws(()=>marketGame.extend(withSource,{kind:'outcome',
+  outcome:{...sourceLinked,pnlCents:26}}),/source-bound outcome differs/);
+ assert.throws(()=>marketGame.extend(start,{kind:'outcome',
+  outcome:{...claim,pnlCents:.25}}),/integer USD cents/);
 });
