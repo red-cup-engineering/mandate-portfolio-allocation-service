@@ -277,3 +277,79 @@ export function scoreBinaryOutcomeFillHoldout({
     admitted:false,tradeEligible:false,orderEffect:false,
   };
 }
+
+
+/**
+ * Downstream source-domain adapters consume a properly paired frozen fit and
+ * later held-out score through ONE research-only gate, not by recopying a
+ * maker-fill formula or marking an aggregate simulation 'calibrated'.
+ *
+ * This validates INTERNAL study consistency and publication ordering, not
+ * cryptographic evidence authenticity. The external receiver still must
+ * independently verify that study IDs really refer to custody-held source
+ * rows. Only an explicitly positive independent-day screen can expose
+ * research candidate bands, and NO result grants trading authority.
+ */
+export function bindScreenedOutcomeFillResearch({
+ training,holdout,holdoutPublishedAt,at,
+ familyScope,quoteRegime,side,
+}={}){
+ if(!label(familyScope)||!label(quoteRegime)||!['yes','no'].includes(side)||
+    !clock(at)||!clock(holdoutPublishedAt)||!training||!holdout||
+    training.kind!=='outcome-conditioned-day-block-fill-fit-v1'||
+    holdout.kind!=='outcome-fill-holdout-brier-v1'||
+    !label(training.id)||!label(holdout.id)||!label(holdout.holdoutReceiptId)||
+    training.familyScope!==familyScope||holdout.familyScope!==familyScope||
+    training.quoteRegime!==quoteRegime||holdout.quoteRegime!==quoteRegime||
+    training.side!==side||holdout.side!==side||
+    holdout.trainingId!==training.id||
+    !clock(training.freezeAt)||!clock(training.availableAt)||
+    !clock(holdout.evaluatedAt)||
+    Date.parse(training.freezeAt)>Date.parse(training.availableAt)||
+    Date.parse(training.availableAt)>=Date.parse(holdout.evaluatedAt)||
+    Date.parse(holdout.evaluatedAt)>Date.parse(holdoutPublishedAt)||
+    Date.parse(holdoutPublishedAt)>Date.parse(at)||
+    training.admitted!==false||holdout.admitted!==false||
+    training.tradeEligible!==false||holdout.tradeEligible!==false)
+  throw new TypeError('matching and timely frozen training/held-out source receipts required');
+ const p=training.modelCandidate;
+ const evidence={
+  kind:'screened-day-block-fill-research-v1',
+  trainingId:training.id,holdoutId:holdout.id,
+  familyScope,quoteRegime,side,at,holdoutPublishedAt,
+  trainDays:{win:training.outcomeDayEvidence?.win?.days??0,
+    loss:training.outcomeDayEvidence?.loss?.days??0},
+  holdoutDays:holdout.independentHeldoutDays,
+  tradeEligible:false,orderEffect:false,
+ };
+ if(training.status!=='exploratory-intervals'||!p||
+    holdout.status!=='held-out-research-screen'||
+    !Number.isSafeInteger(holdout.independentHeldoutDays)||
+    holdout.independentHeldoutDays<20||
+    holdout.conditionallyImproved!==true||
+    !finite(holdout.holdoutBrier?.exploratoryOneSidedLowerBound)||
+    holdout.holdoutBrier.exploratoryOneSidedLowerBound<=0)
+  return {...evidence,status:'insufficient-heldout-improvement',
+    source:'frozen signed receipt identification required upstream of any trading admission'};
+ const goodBand=(b)=>b&&finite(b.low)&&finite(b.high)&&b.low>=0&&b.high<=1&&b.low<=b.high;
+ if(!goodBand(p.probabilityFillGivenWin)||!goodBand(p.probabilityFillGivenLoss))
+  throw new TypeError('fitted outcome-conditional hazard bands malformed');
+ if(!finite(training.outcomeDayEvidence?.win?.mean)||
+    !finite(training.outcomeDayEvidence?.loss?.mean)||
+    training.outcomeDayEvidence.win.mean<p.probabilityFillGivenWin.low||
+    training.outcomeDayEvidence.win.mean>p.probabilityFillGivenWin.high||
+    training.outcomeDayEvidence.loss.mean<p.probabilityFillGivenLoss.low||
+    training.outcomeDayEvidence.loss.mean>p.probabilityFillGivenLoss.high)
+  throw new RangeError('training point fill hazards lie outside asserted uncertainty bands');
+ const identifier=hashPosition({kind:'screened-day-block-fill-research-v1',
+  trainingId:training.id,holdoutId:holdout.id,holdoutPublishedAt,
+  familyScope,quoteRegime,side});
+ return {...evidence,status:'exploratory-heldout-screened',
+  fillEvidence:{id:identifier,kind:'outcome-conditioned',scope:familyScope,
+    availableAt:holdoutPublishedAt,
+    evidenceIds:[training.id,holdout.id,holdout.holdoutReceiptId]},
+  probabilityFillGivenWin:{...p.probabilityFillGivenWin},
+  probabilityFillGivenLoss:{...p.probabilityFillGivenLoss},
+  heldoutBrier:{...holdout.holdoutBrier},
+  caveat:'research-only conditional outcome hazard; independent custody and execution admission NOT established'};
+}
