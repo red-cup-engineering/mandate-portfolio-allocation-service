@@ -13,6 +13,7 @@
 import {cell,address,evidence,sidesOf} from '@red-cup-engineering/signcell/cell';
 import {knowledgeJoin} from '@red-cup-engineering/signchain/bilattice';
 import {deduceSettlementInterval} from './settlement-modal.mjs';
+import {conditionMarketForecastOnSignal} from './market-information-value.mjs';
 
 const identity=s=>typeof s==='string'&&s.trim().length>0;
 const available=t=>typeof t==='string'&&Number.isFinite(Date.parse(t));
@@ -66,5 +67,80 @@ export function projectConditionalSettlementSign({
    supportsYes:flags[0],supportsNo:flags[1],contradictory:flags[0]&&flags[1],
    tradeEligible:false,orderEffect:false,
    caveat:'conditional premise evidence, not authenticated venue settlement or trade permission',
+ };
+}
+
+
+/**
+ * Project a RECEIVED joint-scenario Bayesian update through the existing
+ * SignCell + SignChain knowledge carrier, without turning probability into
+ * FOUR truth or an authenticated settlement result.
+ *
+ * The predicate is about the numerical derivation: "this version of the
+ * joint forecast follows from these model-conditional premises". It is NOT
+ * a proof that any particular Kalshi contract settles YES.
+ *
+ * Downstream SignGraph/SignCraft consumers use the existing sourceRelations
+ * and cause-event edges. Actual source-byte, canonical-address and journal
+ * custody must still be independently received by Operations.
+ */
+export function projectObservedScenarioConditioningSign({
+  forecast,signalModel,observation,at,context,
+}={}){
+ if(!context||!identity(context.source)||!identity(context.rules)||
+    !identity(context.scope)||!identity(context.assumption)||
+    !identity(context.targetDate)||
+    !forecast||forecast.targetSource!==context.source||
+    forecast.targetScope!==context.scope||
+    forecast.targetDate!==context.targetDate)
+  throw new TypeError('source/target/rules-bound conditional forecast SignCell required');
+ const conditioned=conditionMarketForecastOnSignal({
+  forecast,signalModel,observation,at,
+ });
+ if(conditioned.status!=='conditional-research-posterior')
+  throw new RangeError('impossible signal cannot be asserted as a completed Bayes derivation');
+ const premises=[forecast.id,signalModel.id,observation.id];
+ if(new Set(premises).size!==premises.length)
+  throw new TypeError('prior, likelihood model and source receipt identities must remain distinct');
+ const proof={
+  premises:[...premises],
+  rule:'finite-joint-scenario-bayes-conditioning',
+  scope:'conditional-on-preissued-empirically-unverified-signal-likelihood',
+ };
+ const joined=knowledgeJoin(
+  evidence({for:[proof],against:[]}),
+  evidence({for:[],against:[]}),
+ );
+ const details={
+  ...context,
+  condition:'source-conditional-model-derivation',
+  inference:'finite-joint-scenario-bayes-conditioning',
+  availableAt:at,
+  priorForecastId:forecast.id,
+  signalModelId:signalModel.id,
+  observationId:observation.id,
+  observationAvailableAt:observation.availableAt,
+  posteriorForecastId:conditioned.forecast.id,
+  // The canonical content address commits all actual joint weights. Simply
+  // reusing a result ID with different numbers cannot borrow the old proof.
+  posteriorScenarioWeights:conditioned.forecast.scenarios.map(s=>[s.id,s.probability]),
+ };
+ const sign=cell(conditioned.forecast.id,
+  'is-conditionally-derived-joint-scenario-forecast',details,joined);
+ return {
+  kind:'conditional-scenario-sign-projection-v1',
+  at,channel:'source-conditional-model-derivation',context:details,
+  cell:sign,address:address(sign),
+  premiseIds:premises,sourceRelations:[{
+   side:'for',rule:proof.rule,premises:[...premises],
+  }],
+  conditionedForecast:conditioned.forecast,
+  conditionalEvidence:{
+   observationId:observation.id,signalId:observation.signalId,
+   priorForecastId:forecast.id,signalModelId:signalModel.id,
+  },
+  // SignCell knows a conditional mathematical *telling*, not its empirical
+  // reliability, source publisher or actual exchange settlement.
+  sourceAuthenticated:false,tradeEligible:false,orderEffect:false,
  };
 }
