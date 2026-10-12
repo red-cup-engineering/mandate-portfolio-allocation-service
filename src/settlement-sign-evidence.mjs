@@ -138,6 +138,11 @@ export function projectObservedScenarioConditioningSign({
   conditionalEvidence:{
    observationId:observation.id,signalId:observation.signalId,
    priorForecastId:forecast.id,signalModelId:signalModel.id,
+   priorObservedAt:forecast.observedAt,
+   priorAvailableAt:forecast.availableAt??forecast.observedAt,
+   modelAvailableAt:signalModel.availableAt,
+   observationObservedAt:observation.observedAt,
+   observationAvailableAt:observation.availableAt,
   },
   // SignCell knows a conditional mathematical *telling*, not its empirical
   // reliability, source publisher or actual exchange settlement.
