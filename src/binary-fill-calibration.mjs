@@ -57,7 +57,8 @@ export function fitBinaryOutcomeFillByDay({
      r.familyScope!==familyScope||r.quoteRegime!==quoteRegime||r.side!==side||
      !label(r.eventId)||!label(r.marketId)||!day(r.targetDate)||
      !['yes','no'].includes(r.settlementSide)||r.settlementStatus!=='finalized'||
-     typeof r.filled!=='boolean'||
+     typeof r.filled!=='boolean'||r.attemptedContracts!==1||
+     r.filledContracts!==(r.filled?1:0)||
      !label(r.executionReceiptId)||!label(r.settlementReceiptId)||
      !Array.isArray(r.evidenceIds)||!r.evidenceIds.length||
      r.evidenceIds.some(id=>!label(id))||
@@ -89,7 +90,8 @@ export function fitBinaryOutcomeFillByDay({
   accepted.push({
    venueOrderId:r.venueOrderId,
    eventId:r.eventId,marketId:r.marketId,settlementDay:r.targetDate,
-   won,filled:r.filled,settlementAvailableAt:r.settlementAvailableAt,
+   won,filled:r.filled,attemptedContracts:r.attemptedContracts,
+   filledContracts:r.filledContracts,settlementAvailableAt:r.settlementAvailableAt,
    evidenceIds:[...r.evidenceIds],executionReceiptId:r.executionReceiptId,
    settlementReceiptId:r.settlementReceiptId,
   });
@@ -119,7 +121,8 @@ export function fitBinaryOutcomeFillByDay({
   // reused receipt identifiers. Different wins, fills or hyperparameters
   // cannot share one content address or masquerade as the old calibration.
   sourceOrders:provenance.map(x=>[x.venueOrderId,x.eventId,x.marketId,
-   x.settlementDay,x.won,x.filled,x.evidenceIds.slice().sort(cmp),
+   x.settlementDay,x.won,x.filled,x.attemptedContracts,
+   x.filledContracts,x.evidenceIds.slice().sort(cmp),
    x.settlementReceiptId,x.executionReceiptId,x.settlementAvailableAt]),
  });
  return {
