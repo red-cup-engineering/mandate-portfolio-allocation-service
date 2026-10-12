@@ -145,6 +145,36 @@ not a substitute for the canonical SignCell content address. The original
 stateful market game's `condition` move retains its existing
 `hashPosition` adoption semantics and out-of-sample calibration gate.
 
+## Native SignCraft/SignGraph receipt composition
+
+The `./scenario-sign-history` export is an executable, pure bridge from a
+received categorical source signal to the house's **actual** SignStuff
+capabilities. Its `composeConditionalScenarioHistory` takes a checked
+`projectObservedScenarioConditioningSign` and three original-byte
+`sourceReceipts` (prior forecast, frozen emission model, actual observation).
+Every receipt names an existing source ID, source reference, issuer, SHA-256
+digest, original observation clock and first-available clock; the inference
+proof must identify exactly those three predecessors.
+
+The composer produces authentic
+`@red-cup-engineering/signcraft/history` revisions: source receipts are
+observed before the inference's SignCell, and the inference revision's actual
+`parents` point to that prior frontier. Typed reference *cells* link each
+premise to the posterior. The real
+`@red-cup-engineering/signgraph/cell-graph` derives their relation graph.
+No local `causes` array masquerades as a SignCraft journal. All-inference
+replays are idempotent; contradictory reuse of an existing predecessor or
+proof identity is refused.
+
+This is a pure provider of a proposed native history, not a filesystem writer.
+Coesite owns persistent atomic publication and independent replay:
+`@coesite-operations/prediction-market-operations-services-section/received-scenario-history`.
+Source digests bind claimed bytes but do not authenticate their issuers; the
+Operations receiver independently reads and checks those bytes plus actual
+publisher custody before committing. A canonical SignCell address names a
+*triple*, while SignCraft revisions retain its **evidence**, so both addresses
+and complete witnessed causal ancestry must be checked.
+
 ## Consume the funded decision
 
 * Kalshi desk: `cycle --market-decision=decision.json` caps new placements
