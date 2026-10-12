@@ -111,12 +111,15 @@ export function scenarioSourceReceiptCells(projection,sourceReceipts){
     },{for:[{kind:'source-custody-claim-v1',id:r.id,sha256:r.sha256}]})));
 }
 
-function originalCellAt(h,proposal){
+function originalCellAt(h,proposal,{functional=false}={}){
   const existing=historySection(h,proposal.subject,proposal.predicate);
-  if(existing.length===0)return false;
-  if(existing.some(value=>!same(value,proposal)))
+  if(existing.some(value=>same(value,proposal)))return true;
+  // Source identities and completed posterior IDs are immutable, whereas
+  // one source may be a nonfunctional predecessor of MANY joint forecasts.
+  // Do not misclassify a second legitimate inference as a conflicting issuer.
+  if(functional&&existing.length)
     throw new RangeError('existing SignCraft source/proof identity conflicts with new evidence');
-  return true;
+  return false;
 }
 
 /**
@@ -146,8 +149,8 @@ export function composeConditionalScenarioHistory({
   const graph=relationGraphOfCells(links);
   let next=history;
   const priorHeads=historyHeads(next);
-  const missing=receipts.filter(c=>!originalCellAt(next,c));
-  const existingProof=originalCellAt(next,projection.cell);
+  const missing=receipts.filter(c=>!originalCellAt(next,c,{functional:true}));
+  const existingProof=originalCellAt(next,projection.cell,{functional:true});
   const missingLinks=links.filter(c=>!originalCellAt(next,c));
   if(existingProof&&(missing.length||missingLinks.length))
     throw new RangeError('existing inference has missing source custody or causal predecessor links');
