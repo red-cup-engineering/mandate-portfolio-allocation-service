@@ -57,7 +57,7 @@ export function projectConditionalSettlementSign({
  const flags=sidesOf(joined);
  return {
    kind:'conditional-settlement-sign-projection-v1',
-   channel,at,cell:sign,address:address(sign),
+   channel,at,context:details,cell:sign,address:address(sign),
    deduction,
    premiseIds:[...deduction.qualifiedPremises],
    withheld:[...deduction.withheld],
