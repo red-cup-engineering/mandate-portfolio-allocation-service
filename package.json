@@ -19,7 +19,8 @@
     "./prediction-market-research": "./src/prediction-market-research.mjs",
     "./crypto-historical-observations": "./src/crypto-historical-observations.mjs",
     "./equity-prediction-market-research": "./src/equity-prediction-market-research.mjs",
-    "./settlement-sign-evidence": "./src/settlement-sign-evidence.mjs"
+    "./settlement-sign-evidence": "./src/settlement-sign-evidence.mjs",
+    "./joint-scenario-condition": "./src/joint-scenario-condition.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
