@@ -4,6 +4,7 @@
  */
 import { gameRules, hashPosition } from '@red-cup-engineering/gaming/running/rules';
 import { jointKellyForScenarioReturns } from '@red-cup-engineering/position-sizing-service';
+import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -127,13 +128,16 @@ export function conditionMarketForecast(state, observationId, model, at) {
   if (matches.length !== 1) throw new RangeError('conditioning value needs exactly one calibrated bin');
   const base = f.baseProbabilities ?? Object.fromEntries(f.scenarios.map((s) => [s.id, s.probability]));
   if (spec.prior && (Object.keys(spec.prior).length !== f.scenarios.length || f.scenarios.some(s => !Number.isFinite(spec.prior[s.id]) || Math.abs(base[s.id] - spec.prior[s.id]) > 1e-9))) throw new RangeError('conditioning-prior-differs-from-scored-study');
-  const weighted = f.scenarios.map((s) => {
-    const likelihood = nonnegative(matches[0].likelihoods[s.id], 'scenario likelihood');
-    if (likelihood > 1) throw new RangeError('binned scenario likelihood exceeds one');
-    return base[s.id] * likelihood;
+  const likelihoodByScenario=Object.fromEntries(f.scenarios.map(s=>
+    [s.id,nonnegative(matches[0].likelihoods[s.id],'scenario likelihood')]));
+  const conditioned=conditionJointScenarioWeights({
+    scenarios:f.scenarios.map(s=>({...s,probability:base[s.id]})),
+    likelihoodByScenario,
   });
-  const mass = weighted.reduce((a, b) => a + b, 0); if (!(mass > 0)) throw new RangeError('observation has no likelihood under this model');
-  const body = { ...f, observedAt: at, baseProbabilities: base, scenarios: f.scenarios.map((s, k) => ({ ...s, probability: weighted[k] / mass })),
+  if(conditioned.status!=='conditioned')
+    throw new RangeError('observation has no likelihood under this model');
+  const body = { ...f, observedAt: at, baseProbabilities: base,
+    scenarios: f.scenarios.map((s, k) => ({ ...s, probability: conditioned.probabilities[k] })),
     calibration: spec.calibration, evidenceIds: [...new Set([...f.evidenceIds, observationId, model.evidenceId, spec.calibration.record])].sort(),
     conditioning: { observation: observationId, model: model.evidenceId, value, bin: spec.bins.indexOf(matches[0]) } };
   return { ...body, id: hashPosition(body) };
