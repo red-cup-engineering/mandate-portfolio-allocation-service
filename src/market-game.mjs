@@ -8,7 +8,7 @@ import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
 import {assessExecutableBook} from './executable-book.mjs';
 import { principalVenueKey, assertAccountChainScope, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
 import { marketSideKey, assertFleetBookCapacity, apportionFleetBookDemand } from './fleet-liquidity-border.mjs';
-import {classifyMarketOutcome} from './outcome-evidence-border.mjs';
+import {classifyMarketOutcome,readMarketOutcomeEvidence} from './outcome-evidence-border.mjs';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
@@ -109,7 +109,12 @@ function extend(state, move) {
         order:d.orders.find(o=>o.id===row.orderId),
         sourceObservation:state.observations[row.sourceObservationId]});
       if (state.outcomes[row.id] && hashPosition(state.outcomes[row.id]) !== hashPosition(row)) throw new RangeError('outcome identity reused');
-      if (Object.values(state.outcomes).some((o) => o.id !== row.id && o.receipt === row.receipt)) throw new RangeError('receipt already counted as an outcome');
+      if (Object.values(state.outcomes).some(o=>o.id!==row.id &&
+        o.receipt===row.receipt &&
+        (o.decisionId!==row.decisionId||o.orderId!==row.orderId)))
+        throw new RangeError('economic receipt reused for an unrelated order');
+      // Opposite tellings about ONE economic event are retained, not discarded.
+      // The point-in-time evidence reader counts it once and marks the dispute.
       next = { ...state, outcomes: { ...state.outcomes, [row.id]: row } }; break;
     }
     default: throw new TypeError(`unknown market move ${move.kind}`);
@@ -186,32 +191,7 @@ export function lossRateUpperBound(losses, trials, alpha = 0.05) {
  * Never emit it in the measured return fields before external receiving.
  */
 export function strategyPerformance(state, asOf) {
-  const cutoff = time(asOf), by = {};
-  for (const row of Object.values(state.outcomes)) {
-    if (time(row.observedAt) > cutoff) continue;
-    const decision = state.decisions[row.decisionId];
-    const order = decision?.orders.find(o=>o.id===row.orderId);
-    if(!order)throw new TypeError('performance requires a planned source order');
-    const reading = classifyMarketOutcome({outcome:row,decision,order,
-      sourceObservation:state.observations[row.sourceObservationId]});
-    const s = by[order.strategy] ??= {
-      observations:0,pnlCents:null,
-      unverifiedClaims:0,unverifiedClaimedPnlCents:0,
-      sourceLinkedClaims:0,sourceLinkedClaimedPnlCents:0,
-      sourceAuthenticated:false,independentlyReconciled:false,
-    };
-    s.unverifiedClaims++;
-    s.unverifiedClaimedPnlCents += row.pnlCents;
-    if (!Number.isSafeInteger(s.unverifiedClaimedPnlCents))
-      throw new RangeError('claimed financial total exceeds safe integer cents');
-    if (reading.status === 'source-linked-claim') {
-      s.sourceLinkedClaims++;
-      s.sourceLinkedClaimedPnlCents += reading.pnlCents;
-      if (!Number.isSafeInteger(s.sourceLinkedClaimedPnlCents))
-        throw new RangeError('source-linked financial total exceeds safe integer cents');
-    }
-  }
-  return by;
+  return readMarketOutcomeEvidence(state,asOf).performance;
 }
 
 // Calibration belongs to a particular payoff, not just a probability vector.
@@ -324,12 +304,15 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
   const accountByVenue = indexPrincipalAccounts(state.accounts, principal);
   const equity = accounts.reduce((s, a) => s + a.equityCents, 0); if (equity <= 0) throw new RangeError('positive portfolio equity required');
   const baseline = f.scenarios.map((s) => 1 + accounts.reduce((pnl, a) => pnl + scenarioHeldPnLCents(s, principal, a.venue), 0) / equity);
+  const outcomeEvidence=readMarketOutcomeEvidence(state,at);
+  const disputedStrategies=new Set(outcomeEvidence.riskBlockingDisputes.map(x=>x.strategy));
   const skips = [], candidates = [], seen = new Set();
   for (const strategy of Object.values(state.strategies).sort((a, b) => a.id.localeCompare(b.id))) {
     for (const id of strategy.quoteIds) {
       const q = state.quotes[id];
       const refuse = (reason) => skips.push({ strategy: strategy.id, id, reason });
       if (time(strategy.observedAt) > now) { refuse('strategy proposed after decision time'); continue; }
+      if (disputedStrategies.has(strategy.id)) { refuse('unresolved contradictory economic outcome evidence'); continue; }
       if (strategy.falsifierFired) { refuse('strategy falsified'); continue; }
       if (!evidenceOK(strategy.evidenceIds)) { refuse('future or missing strategy evidence'); continue; }
       if (!fresh(q) || !accountByVenue.has(q?.venue)) { refuse('quote/account absent or stale'); continue; }

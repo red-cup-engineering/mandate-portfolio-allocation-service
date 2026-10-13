@@ -27,7 +27,7 @@ The example is **synthetic**. Its scenario prices, likelihoods and calibration
 are demonstration inputs, not market forecasts. It exercises funded proposals
 for all three venues, a prediction-market observation changing allocations on
 the other venues, Alpaca intent admission, GMX unsigned order building,
-receipt-based performance and identical replay. It makes no venue writes.
+unverified outcome-claim feedback and identical replay. It makes no venue writes.
 The public collector actually reads the New York Fed and Kalshi without keys.
 
 For actual work create an empty JSONL play and append moves with:
@@ -85,8 +85,36 @@ hash; reordered/missing entries fail replay. Independent observations commute.
   crypto allocations. Revisions recompute from one prior; multiple signals
   require a joint calibrated model. Market-implied probabilities are observations,
   not automatically physical probabilities or causal influence coefficients.
-* `outcome`: decision/order IDs, unique execution or valuation receipt,
-  observation time and realized P&L. Proposals and unfilled shadows add no wins.
+* `outcome`: decision/order IDs, an economic-event receipt, observation time,
+  claimed integer-cent P&L and optional original source observation. Multiple
+  opposing claims for one economic receipt coexist and are **one** logical
+  event, never extra independent samples. Claimed P&L is not accepted
+  realized profit. Conflicts between distinct source-linked amounts refuse
+  subsequent orders for the affected strategy without manufacturing a
+  settlement verdict; a bare unsupported objection remains visible but has
+  no independent risk-blocking authority.
+
+The real replay command exposes the same reading without storing a new
+report or making a venue call:
+
+```sh
+node apps/market-game.mjs evidence --record play.jsonl --at 2026-10-12T20:00:00Z
+node apps/market-game.mjs evidence --record play.jsonl --at 2026-10-12T20:00:00Z --signs
+```
+
+By default the result is a compact per-principal outcome and blocking-strategy
+reading; `--signs` includes canonical SignCell addresses only for claims with
+counterevidence. Neither mode adds moves to the play.
+
+The existing `readMarketOutcomeEvidence` view groups the retained moves by
+economic identity, avoids double counting, and reads evidence only when
+available by the decision clock. `projectMarketOutcomeEvidenceSigns` evaluates
+the same claims as native SignCell/SignChain FOUR support and opposition.
+`composeMarketOutcomeEvidenceHistory` optionally realizes that projection
+as native SignCraft revisions and SignGraph 1-chain references, not a second
+event database. A `source-linked-claim` is **not** independently authenticated,
+accounting-reconciled, or trade-eligible; scored observations and accepted P&L
+remain unavailable until independent Operations receiving is completed.
 
 Policy explicitly states observation age, minimum calibration sample count,
 venue cash floors, maximum deployed/instrument fractions, common-factor caps,

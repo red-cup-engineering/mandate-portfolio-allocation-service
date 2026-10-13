@@ -2,6 +2,8 @@
 /** Finite, streaming market-game runs. Never schedules or places an order. */
 import { statSync, appendFileSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, existsSync } from 'node:fs';
 import { marketGame, planMarket } from '../src/market-game.mjs';
+import {readMarketOutcomeEvidence} from '../src/outcome-evidence-border.mjs';
+import {projectMarketOutcomeEvidenceSigns} from '../src/settlement-sign-evidence.mjs';
 import { readPublicObservation, readNewsObservations, alpacaNewsObservation, newswireObservation, evmLogObservation, kalshiMacroObservation } from '../src/public-observations.mjs';
 import { hashPosition } from '@red-cup-engineering/gaming/running/rules';
 import { readMarketPlay as fold } from '../src/play.mjs';
@@ -55,6 +57,38 @@ async function main() {
     if (opt('output')) { writeFileSync(opt('output'), JSON.stringify(research, null, 2) + '\n', { flag: 'wx' }); return { packetId: research.id, facts: research.facts.length, sources: research.observations.length, output: opt('output') }; }
     return research;
   }
+  if (command === 'evidence') {
+    // An ephemeral read of existing market moves, not another journal or
+    // a new financial fact. Nothing is appended and no trade is eligible.
+    const at=opt('at')??new Date().toISOString();
+    const view=readMarketOutcomeEvidence(state,at);
+    const blocked=[...new Map(view.riskBlockingDisputes.map(x=>[
+      JSON.stringify([x.principal,x.strategy]),
+      {principal:x.principal,strategy:x.strategy,reason:'source-linked-outcome-disagreement'},
+    ])).values()];
+    const report={
+      kind:'market-game-outcome-knowledge-reading-v1',
+      at,position:hashPosition(state),
+      economicEvents:view.events.length,
+      contradictoryEvents:view.disputes.length,
+      sourceLinkedDisputes:view.riskBlockingDisputes.length,
+      blockedStrategies:blocked,
+      ambiguousStrategyNames:view.ambiguousStrategyNames,
+      conditionalPerformanceByPrincipal:view.performanceByPrincipal,
+      acceptedMeasuredOutcomes:0,
+      // A consumer must separately obtain independently received settlement
+      // and accounting facts; a positive source-link is not authenticated.
+      sourceAuthenticated:false,independentlyReconciled:false,
+      effect:'read-only',
+    };
+    if(args.includes('--signs')){
+      const signs=projectMarketOutcomeEvidenceSigns({state,at});
+      report.conflictSigns=signs.claims.filter(x=>x.opposesClaim)
+        .map(x=>({address:x.address,proposition:x.proposition,
+          supportsClaim:x.supportsClaim,opposesClaim:x.opposesClaim}));
+    }
+    return report;
+  }
   if (command === 'replay') return { valid: true, rows, position: hashPosition(state), decisions: Object.keys(state.decisions).length, outcomes: Object.keys(state.outcomes).length };
   if (command === 'plan') {
     const policy = boundedJson(opt('policy')); const at = opt('at') ?? new Date().toISOString();
@@ -62,7 +96,7 @@ async function main() {
     if (args.includes('--append')) appendEntry(opt('record'), { seq: seq + 1, intent: { kind: 'decide', expectedPosition: hashPosition(state), policy, at }, ts: Date.parse(at) });
     return decision;
   }
-  throw new Error('usage: market-game replay|plan|collect|news|research|ingest --record play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
+  throw new Error('usage: market-game replay|evidence|plan|collect|news|research|ingest --record play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
 }
 let lock;
 try {

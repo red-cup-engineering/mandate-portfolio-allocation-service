@@ -14,6 +14,7 @@ import {
 } from '@red-cup-engineering/signcraft/history';
 import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/signgraph/cell-graph';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
+import {projectMarketOutcomeEvidenceSigns} from './settlement-sign-evidence.mjs';
 import {
   finiteLawExpectation,extremalTotalVariationExpectation,upperTailMeanOfFiniteLaw,
 } from '@red-cup-engineering/metrologic/number/finite-law';
@@ -503,6 +504,56 @@ export function composeConditionalRobustActionHistory({
     history:next,sourceCells:sources,linkCells:links,graph,flow,
     proofAddress:projection.address,proofRevisionId,
     priorHeads,heads:historyHeads(next),
+    tradeEligible:false,orderEffect:false,
+  });
+}
+
+
+/**
+ * Existing SignCraft history is the carrier for opposing outcome tellings.
+ *
+ * No new "market receipt" or parallel event log: original market-game moves
+ * remain the source and SignCraft stores only native SignCell consequences.
+ * Claim IDs point to the resulting conditional proof addresses through real
+ * SignGraph 1-chain edges. Historical contradictory versions are retained;
+ * rerunning the same position is idempotent. The caller owns persistence.
+ */
+export function composeMarketOutcomeEvidenceHistory({
+  history=createHistory(),state,at,source='market-game-outcome-evidence',
+}={}) {
+  validateHistory(history);
+  if(!named(source))
+    throw new TypeError('outcome evidence history requires a named source');
+  const projection=projectMarketOutcomeEvidenceSigns({state,at});
+  const links=projection.claims.flatMap(projected=>
+    projected.claimIds.map(id=>cell(id,
+      'is-causal-premise-of-market-outcome-sign',projected.address,{
+        for:[{
+          rule:'financial-outcome-evidential-projection',
+          claimId:id,proofAddress:projected.address,
+          sourceAuthenticated:false,
+        }],
+      })));
+  const cells=[...projection.claims.map(x=>x.cell),...links];
+  const existingHeads=historyHeads(history);
+  const missing=cells.filter(c=>!originalCellAt(history,c));
+  if(!missing.length)return Object.freeze({
+    kind:'market-outcome-signcraft-reading-v1',status:'already-observed',
+    history,projection,linkCells:links,graph:links.length?relationGraphOfCells(links):null,
+    flow:links.length?flowNetworkOfCells(links):null,
+    oldHeads:existingHeads,heads:existingHeads,
+    tradeEligible:false,orderEffect:false,
+  });
+  const next=observeHistory(history,missing,{source});
+  for(const c of cells)
+    if(!originalCellAt(next,c))
+      throw new Error('financial outcome claim or causal premise absent after SignCraft composition');
+  return Object.freeze({
+    kind:'market-outcome-signcraft-reading-v1',status:'composed',
+    history:next,projection,linkCells:links,
+    graph:links.length?relationGraphOfCells(links):null,
+    flow:links.length?flowNetworkOfCells(links):null,
+    oldHeads:existingHeads,heads:historyHeads(next),
     tradeEligible:false,orderEffect:false,
   });
 }

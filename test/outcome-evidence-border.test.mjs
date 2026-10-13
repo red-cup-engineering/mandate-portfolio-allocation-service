@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {classifyMarketOutcome} from '../src/outcome-evidence-border.mjs';
+import {classifyMarketOutcome,readMarketOutcomeEvidence} from '../src/outcome-evidence-border.mjs';
 
 const decision={principal:'test-principal',at:'2026-10-07T02:00:00Z'};
 const order={venue:'evm',instrument:'USDC'};
@@ -58,4 +58,120 @@ test('future, predecision and unpublished source observations are not retroactiv
 test('USD-cent accounting must be integral and within the safe integer range',()=>{
  for(const pnlCents of [0.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1])
   assert.throws(()=>classify({...outcome,pnlCents}),/integer USD cents/);
+});
+
+const at='2026-10-09T00:00:00Z';
+const decisionId='decision-1',orderId='order-1';
+const marketState=()=>({
+ observations:{'source-1':structuredClone(sourceObservation)},
+ decisions:{[decisionId]:{
+  ...decision,id:decisionId,orders:[{...order,id:orderId,strategy:'measured-strategy'}],
+ }},
+ outcomes:{},
+});
+const add=(state,record)=>{state.outcomes[record.id]=record;return state;};
+
+test('a repeated economic outcome is ONE logical trial, not two claimed returns',()=>{
+ const s=marketState(),first={...outcome};
+ add(s,first);add(s,{...first,id:'retelling',observedAt:'2026-10-08T05:00:00Z'});
+ const read=readMarketOutcomeEvidence(s,at);
+ assert.equal(read.events.length,1);
+ assert.equal(read.events[0].claims[0].claimIds.length,2);
+ assert.equal(read.performance['measured-strategy'].unverifiedClaims,1);
+ assert.equal(read.performance['measured-strategy'].sourceLinkedClaims,1);
+ assert.equal(read.performance['measured-strategy'].sourceLinkedClaimedPnlCents,25);
+ assert.equal(read.performance['measured-strategy'].observations,0);
+ assert.equal(read.performance['measured-strategy'].pnlCents,null);
+ assert.equal(read.independentlyReconciled,false);
+});
+test('contradictory claim amounts coexist but cannot be silently summed or scored',()=>{
+ const s=marketState();
+ add(s,{...outcome});
+ add(s,{...outcome,id:'opposed-assertion',pnlCents:-40,
+  observedAt:'2026-10-08T06:00:00Z',sourceObservationId:undefined});
+ const read=readMarketOutcomeEvidence(s,at);
+ assert.equal(read.events.length,1);
+ assert.equal(read.disputes.length,1);
+ assert.equal(read.riskBlockingDisputes.length,0,
+  'a bare contrary assertion cannot acquire operational risk-blocking authority');
+ assert.equal(read.disputes[0].status,'contested');
+ assert.deepEqual(read.disputes[0].claims.map(x=>x.pnlCents),[-40,25]);
+ const stats=read.performance['measured-strategy'];
+ assert.equal(stats.unverifiedClaims,1);
+ assert.equal(stats.sourceLinkedClaims,1);
+ assert.equal(stats.contestedOutcomes,1);
+ assert.equal(stats.unverifiedClaimedPnlCents,null);
+ assert.equal(stats.sourceLinkedClaimedPnlCents,null);
+ assert.equal(stats.pnlCents,null);
+});
+test('conflicting source-linked original observations remain competing evidence',()=>{
+ const s=marketState();
+ add(s,{...outcome});
+ s.observations['source-2']={...sourceObservation,id:'source-2',
+  value:{...sourceObservation.value,pnlCents:-5}};
+ add(s,{...outcome,id:'opposite-linked',sourceObservationId:'source-2',
+  pnlCents:-5,observedAt:'2026-10-08T05:00:00Z'});
+ const read=readMarketOutcomeEvidence(s,at);
+ assert.equal(read.disputes.length,1);
+ assert.deepEqual(read.disputes[0].claims.map(x=>x.sourceLinked),[true,true]);
+ assert.equal(read.riskBlockingDisputes.length,1);
+ assert.equal(read.performance['measured-strategy'].sourceLinkedDisputes,1);
+ assert.equal(read.performance['measured-strategy'].sourceLinkedClaims,1);
+});
+test('a later telling cannot leak through the earlier observation filtration',()=>{
+ const s=marketState();
+ add(s,{...outcome});
+ add(s,{...outcome,id:'future-rebuttal',pnlCents:-20,
+  observedAt:'2026-10-09T10:00:00Z',sourceObservationId:undefined});
+ const first=readMarketOutcomeEvidence(s,at);
+ assert.equal(first.disputes.length,0);
+ assert.equal(first.performance['measured-strategy'].unverifiedClaimedPnlCents,25);
+ const later=readMarketOutcomeEvidence(s,'2026-10-10T00:00:00Z');
+ assert.equal(later.disputes.length,1);
+});
+test('a receipt cannot be spent as evidence of two different orders',()=>{
+ const s=marketState();
+ add(s,{...outcome});
+ s.decisions.second={...decision,id:'second',orders:[{...order,id:'another-order',strategy:'other'}]};
+ add(s,{...outcome,id:'misattributed',decisionId:'second',orderId:'another-order',
+  sourceObservationId:undefined});
+ assert.throws(()=>readMarketOutcomeEvidence(s,at),/different planned orders/);
+});
+test('permutation of tellings and redundant claims cannot affect evidential state',()=>{
+ const rows=[
+  {...outcome},
+  {...outcome,id:'copy',observedAt:'2026-10-08T05:00:00Z'},
+  {...outcome,id:'dispute',pnlCents:-1,sourceObservationId:undefined},
+ ];
+ const a=marketState(),b=marketState();
+ rows.forEach(row=>add(a,row));
+ [...rows].reverse().forEach(row=>add(b,row));
+ assert.deepEqual(readMarketOutcomeEvidence(a,at),readMarketOutcomeEvidence(b,at));
+});
+test('unknown source aliases do not count as measurements and unsafe cents are refused',()=>{
+ const s=marketState();add(s,{...outcome,sourceObservationId:undefined});
+ assert.equal(readMarketOutcomeEvidence(s,at).performance['measured-strategy'].observations,0);
+ add(s,{...outcome,id:'invalid',pnlCents:Number.MAX_SAFE_INTEGER+1});
+ assert.throws(()=>readMarketOutcomeEvidence(s,at),/integer USD cents/);
+});
+
+
+test('the same strategy label in two principals cannot silently pool economic outcomes',()=>{
+ const s=marketState();
+ s.decisions.other={
+  id:'other',principal:'another-principal',at:decision.at,
+  orders:[{id:'other-order',strategy:'measured-strategy',
+    venue:'kalshi',instrument:'OTHER'}],
+ };
+ add(s,{...outcome,sourceObservationId:undefined});
+ add(s,{...outcome,id:'other-claim',decisionId:'other',
+  orderId:'other-order',receipt:'different-economic-event',
+  sourceObservationId:undefined,pnlCents:-30});
+ const r=readMarketOutcomeEvidence(s,at);
+ assert.deepEqual(r.ambiguousStrategyNames,['measured-strategy']);
+ assert.equal(Object.hasOwn(r.performance,'measured-strategy'),false);
+ assert.equal(r.performanceByPrincipal['test-principal']
+  ['measured-strategy'].unverifiedClaimedPnlCents,25);
+ assert.equal(r.performanceByPrincipal['another-principal']
+  ['measured-strategy'].unverifiedClaimedPnlCents,-30);
 });

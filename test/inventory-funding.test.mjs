@@ -313,3 +313,63 @@ test('market performance keeps historical outcome assertions separate from sourc
  assert.throws(()=>marketGame.extend(start,{kind:'outcome',
   outcome:{...claim,pnlCents:.25}}),/integer USD cents/);
 });
+
+
+test('opposed P&L evidence for one actual receipt coexists and freezes its strategy',()=>{
+ const base=state();
+ const decision=planMarket(base,policy,at);
+ assert.equal(decision.orders.length,1);
+ const withDecision={...base,decisions:{[decision.id]:decision}};
+ const traceAt='2026-10-07T02:00:45Z';
+ const observedAt='2026-10-07T02:00:36Z';
+ const first={
+  id:'source-positive',source:'urn:synthetic:venue-reading',
+  availableAt:'2026-10-07T02:00:34Z',observedAt,
+  value:{
+   kind:'venue-realized-pnl-v1',
+   decisionId:decision.id,orderId:'swap',principal:policy.principal,
+   venue:'evm',instrument:'USDC',currency:'USD',receipt:'venue-event-1',
+   pnlCents:12,sourceDigest:'sha256:'+'a'.repeat(64),
+  },
+ };
+ const other={...first,id:'source-opposed',value:{...first.value,pnlCents:-4,
+  sourceDigest:'sha256:'+'b'.repeat(64)}};
+ let s=marketGame.extend(withDecision,{kind:'observe',observation:first}).state;
+ s=marketGame.extend(s,{kind:'observe',observation:other}).state;
+ const claim={id:'positive-claim',decisionId:decision.id,orderId:'swap',
+  receipt:'venue-event-1',pnlCents:12,
+  sourceObservationId:first.id,observedAt:'2026-10-07T02:00:40Z'};
+ s=marketGame.extend(s,{kind:'outcome',outcome:claim}).state;
+ const contradiction={...claim,id:'negative-claim',pnlCents:-4,
+  sourceObservationId:other.id,observedAt:'2026-10-07T02:00:42Z'};
+ const received=marketGame.extend(s,{kind:'outcome',outcome:contradiction});
+ assert.equal(Object.keys(received.state.outcomes).length,2);
+ const performance=strategyPerformance(received.state,traceAt).hedge;
+ assert.equal(performance.contestedOutcomes,1);
+ assert.equal(performance.sourceLinkedClaims,1);
+ assert.equal(performance.pnlCents,null);
+ assert.equal(performance.unverifiedClaimedPnlCents,null);
+ const rejected=planMarket(received.state,policy,traceAt);
+ assert.equal(rejected.orders.length,0);
+ assert.ok(rejected.skips.some(x=>/unresolved contradictory economic outcome evidence/.test(x.reason)));
+ // The later conflict does not retroactively block a prior decision.
+ assert.equal(strategyPerformance(received.state,'2026-10-07T02:00:41Z').hedge.contestedOutcomes,0);
+ const duplicate={...contradiction,id:'extra-source-retelling'};
+ s=marketGame.extend(received.state,{kind:'outcome',outcome:duplicate}).state;
+ assert.equal(strategyPerformance(s,traceAt).hedge.contestedOutcomes,1);
+});
+
+
+test('unsupported contradiction cannot invent an operational veto on a financially admissible strategy',()=>{
+ const s=state(),d=planMarket(s,policy,at);
+ s.decisions[d.id]=d;
+ s.outcomes.left={id:'unverified-left',decisionId:d.id,orderId:'swap',
+  receipt:'claimed-event',pnlCents:7,
+  observedAt:'2026-10-07T02:00:30Z'};
+ s.outcomes.right={...s.outcomes.left,id:'unverified-right',pnlCents:-2};
+ const atLater='2026-10-07T02:00:45Z';
+ assert.equal(strategyPerformance(s,atLater).hedge.contestedOutcomes,1);
+ assert.equal(strategyPerformance(s,atLater).hedge.sourceLinkedDisputes,0);
+ assert.equal(planMarket(s,policy,atLater).orders.length,1,
+  'a bare contradiction is knowledge of disagreement, not live source authority');
+});

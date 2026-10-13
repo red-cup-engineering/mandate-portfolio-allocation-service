@@ -15,6 +15,7 @@ import {knowledgeJoin} from '@red-cup-engineering/signchain/bilattice';
 import {deduceSettlementInterval} from './settlement-modal.mjs';
 import {conditionMarketForecastOnSignal} from './market-information-value.mjs';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
+import {readMarketOutcomeEvidence} from './outcome-evidence-border.mjs';
 
 const identity=s=>typeof s==='string'&&s.trim().length>0;
 const available=t=>typeof t==='string'&&Number.isFinite(Date.parse(t));
@@ -229,5 +230,68 @@ export function projectConditionalRobustActionSign({
     sourceRelations:[{side:'for',rule:proof.rule,premises:premiseIds}],
     sourceAuthenticated:false,radiusEmpiricallyVerified:false,
     tradeEligible:false,orderEffect:false,
+  });
+}
+
+
+/**
+ * Reconcile opposed tellings into ACTUAL SignCell evidence and SignChain FOUR.
+ *
+ * These are claims about a claimed USD-cent result, not an accepted profit.
+ * One immutable economic receipt is functional for one decision/order;
+ * opposing values therefore tell AGAINST each other's claim. A contradiction
+ * has both for and against witnesses, not an ex falso source of positive P&L.
+ *
+ * No separate receipt type, sign store, probability, or trade authority:
+ * the evidence view is read directly from the existing market-game state.
+ * SignGraph/SignCraft consumers can use the original claim IDs and canonical
+ * SignCell addresses as causal references. Original source verification and
+ * accounting reconciliation remain independent receiving obligations.
+ */
+export function projectMarketOutcomeEvidenceSigns({state,at}={}) {
+  const reading=readMarketOutcomeEvidence(state,at);
+  const projected=[];
+  for(const event of reading.events) {
+    for(const claim of event.claims) {
+      const forWitnesses=claim.claimIds.map(claimId=>({
+        kind:'economic-outcome-claim',claimId,receipt:event.receipt,
+        sourceObservationIds:claim.sourceObservationIds,
+        sourceLinked:claim.sourceLinked,
+      }));
+      const againstWitnesses=event.claims
+        .filter(other=>other.pnlCents!==claim.pnlCents)
+        .flatMap(other=>other.claimIds.map(claimId=>({
+          kind:'opposing-economic-outcome-claim',claimId,
+          receipt:event.receipt,claimedPnlCents:other.pnlCents,
+          rule:'one-economic-event-has-one-realized-pnl-value',
+        })));
+      const joined=knowledgeJoin(
+        evidence({for:forWitnesses,against:[]}),
+        evidence({for:[],against:againstWitnesses}),
+      );
+      const proposition={
+        decisionId:event.decisionId,orderId:event.orderId,
+        principal:event.principal,receipt:event.receipt,
+        currency:'USD',claimedPnlCents:claim.pnlCents,
+        sourceAuthenticated:false,independentlyReconciled:false,
+      };
+      const sign=cell(event.receipt,'has-claimed-economic-pnl-cents',
+        proposition,joined);
+      const [supports,opposes]=sidesOf(joined);
+      projected.push(Object.freeze({
+        cell:sign,address:address(sign),proposition,
+        supportsClaim:supports,opposesClaim:opposes,
+        claimIds:[...claim.claimIds],
+        sourceObservationIds:[...claim.sourceObservationIds],
+        tradeEligible:false,sourceAuthenticated:false,
+      }));
+    }
+  }
+  return Object.freeze({
+    kind:'market-outcome-sign-evidence-reading-v1',at,
+    claims:Object.freeze(projected),
+    disputedEconomicEvents:reading.disputes.length,
+    // Explicitly read only: no ledger write and no empirical outcome admitted.
+    acceptedOutcomeCount:0,tradeEligible:false,orderEffect:false,
   });
 }
