@@ -7,10 +7,11 @@
  * normal reader refuses legacy rows, preventing perpetual dual formats.
  */
 import {
-  createReadStream,statSync,openSync,closeSync,writeSync,
-  fsyncSync,renameSync,unlinkSync,
+  createReadStream,lstatSync,openSync,closeSync,writeSync,readSync,
+  fstatSync,fsyncSync,renameSync,linkSync,unlinkSync,constants,
 } from 'node:fs';
 import {createInterface} from 'node:readline';
+import {dirname} from 'node:path';
 import {validatePlayRecord} from '@red-cup-engineering/gaming/running/play-record';
 import {hashPosition} from '@red-cup-engineering/gaming/running/rules';
 import {cell,coincides,measured} from '@red-cup-engineering/signcell/cell';
@@ -55,11 +56,37 @@ export function seavtOfMarketMove(state,seq,intent,receivedAt){
   }),receivedAt);
 }
 
-const boundedFile=path=>{
-  const stats=statSync(path);
-  if(!stats.isFile()||stats.size>PLAY_BYTES_MAX)
-    throw new RangeError('market play must be a regular file <= 128 MiB');
+/** Only actual regular play files are admitted; a symlink can redirect an
+ * authorized finance write to unrelated data. The source file is never
+ * automatically created or truncated by the existing writer. */
+const boundedFile=(path,maxBytes=PLAY_BYTES_MAX)=>{
+  const stats=lstatSync(path);
+  if(!stats.isFile()||stats.size>maxBytes)
+    throw new RangeError('market play must be a bounded regular file, not a symlink');
   return stats;
+};
+const nativeFlags=write=>{
+  if(!Number.isInteger(constants.O_NOFOLLOW))
+    throw new Error('native play requires a no-follow filesystem');
+  return (write?constants.O_RDWR|constants.O_APPEND:constants.O_RDONLY)|
+    constants.O_NOFOLLOW;
+};
+const openChecked=(path,write=false)=>{
+  const fd=openSync(path,nativeFlags(write));
+  if(!fstatSync(fd).isFile()){
+    closeSync(fd);throw new TypeError('market play must be an actual regular file');
+  }
+  return fd;
+};
+const completeLines=(fd,size)=>{
+  if(size===0)return;
+  const last=Buffer.allocUnsafe(1);
+  if(readSync(fd,last,0,1,size-1)!==1||last[0]!==10)
+    throw new TypeError('market play has an unterminated final SEAVT line');
+};
+const syncParentDirectory=path=>{
+  const fd=openSync(dirname(path),constants.O_RDONLY);
+  try{fsyncSync(fd);}finally{closeSync(fd);}
 };
 const writeFull=(fd,content)=>{
   const bytes=Buffer.from(content,'utf8');
@@ -85,19 +112,23 @@ export function appendMarketMove(path,state,seq,intent,receivedAt,precedingRecei
     throw new RangeError('market play receiving clocks must be monotone');
   const row=seavtOfMarketMove(state,seq,intent,receivedAt);
   const text=serialized(row);
-  if(boundedFile(path).size+Buffer.byteLength(text)>PLAY_BYTES_MAX)
-    throw new RangeError('bounded native SEAVT play exceeds 128 MiB');
-  const fd=openSync(path,'a');
-  try{writeFull(fd,text);fsyncSync(fd);}
-  finally{closeSync(fd);}
+  boundedFile(path);
+  const fd=openChecked(path,true);
+  try{
+    const size=fstatSync(fd).size;
+    completeLines(fd,size);
+    if(size+Buffer.byteLength(text)>PLAY_BYTES_MAX)
+      throw new RangeError('bounded native SEAVT play exceeds 128 MiB');
+    writeFull(fd,text);fsyncSync(fd);
+  }finally{closeSync(fd);}
   return row;
 }
 
 async function* linesOf(path,maxBytes){
-  const stats=statSync(path);
-  if(!stats.isFile()||stats.size>maxBytes)
-    throw new RangeError('market play is not a bounded regular file');
-  const rl=createInterface({input:createReadStream(path),crlfDelay:Infinity});
+  const stats=boundedFile(path,maxBytes);
+  const fd=openChecked(path);
+  try{completeLines(fd,fstatSync(fd).size);}finally{closeSync(fd);}
+  const rl=createInterface({input:createReadStream(path,{flags:nativeFlags(false)}),crlfDelay:Infinity});
   let lines=0;
   try{
     for await(const line of rl){
@@ -179,9 +210,18 @@ export async function migrateLegacyMarketPlay(path){
     if(received.seq!==seq||received.rows!==rows||
       hashPosition(received.state)!==hashPosition(state))
       throw new Error('native SEAVT replay differs from the admitted historical play');
-    renameSync(path,backup);
-    try{renameSync(temp,path);}
-    catch(error){renameSync(backup,path);throw error;}
+    // A hard link preserves the original byte-for-byte in the SAME directory,
+    // without opening any gap in the active play path. The subsequent rename
+    // replaces the active name atomically. Both directory transitions are
+    // fsynced so an interrupted migration never silently loses the archive.
+    const initial=boundedFile(path,32*1048576);
+    linkSync(path,backup);
+    syncParentDirectory(path);
+    const unchanged=boundedFile(path,32*1048576);
+    if(initial.size!==unchanged.size||initial.mtimeMs!==unchanged.mtimeMs)
+      throw new Error('original financial play changed during migration');
+    renameSync(temp,path);
+    syncParentDirectory(path);
     return {rows,position:hashPosition(state)};
   }catch(error){
     if(fd!==undefined)closeSync(fd);
