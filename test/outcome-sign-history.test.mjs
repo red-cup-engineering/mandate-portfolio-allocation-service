@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHistory,historySection} from '@red-cup-engineering/signcraft/history';
 import {address} from '@red-cup-engineering/signcell/cell';
 import {projectMarketOutcomeEvidenceSigns} from '../src/settlement-sign-evidence.mjs';
-import {composeMarketOutcomeEvidenceHistory} from '../src/scenario-sign-history.mjs';
+import {composeMarketOutcomeEvidenceHistory,outcomeSourceReceiptCells} from '../src/scenario-sign-history.mjs';
 
 const decision={id:'decision',principal:'test-principal',
  at:'2026-10-07T02:00:00Z',
@@ -90,4 +90,30 @@ test('empty evidence neither creates a revision nor a fictitious SignGraph',()=>
  assert.equal(empty.projection.claims.length,0);
  assert.equal(empty.graph,null);
  assert.equal(empty.flow,null);
+});
+
+
+test('outcome receiving reuses canonical SignCell custody used by Bayes and robust proofs',()=>{
+ const original={
+  id:'source-1',issuer:'synthetic-independent-reader',
+  sourceRef:'fixture://original-order-1',
+  sha256:'sha256:'+'a'.repeat(64),
+  observedAt:'2026-10-08T03:00:00Z',
+  availableAt:'2026-10-08T03:30:00Z',
+ };
+ const receipt=()=>({
+  sourceObservationIds:['source-1'],sourceReceipts:[original],at,
+ });
+ const cells=outcomeSourceReceiptCells(receipt());
+ assert.equal(cells.length,1);
+ assert.equal(cells[0].subject,original.id);
+ assert.equal(cells[0].predicate,'prediction-market-source-receipt');
+ assert.equal(cells[0].object.sha256,original.sha256);
+ assert.ok(cells[0].for.length);
+ assert.throws(()=>outcomeSourceReceiptCells({
+  ...receipt(),sourceObservationIds:['source-1','source-1'],
+ }),/distinct/);
+ assert.throws(()=>outcomeSourceReceiptCells({
+  ...receipt(),sourceReceipts:[{...original,availableAt:'2026-10-10T00:00:00Z'}],
+ }),/bounded absolute clocks/);
 });

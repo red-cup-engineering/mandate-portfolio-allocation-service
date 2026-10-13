@@ -202,6 +202,26 @@ function sourceReceiptCellsOf(receipts){
       observedAt:r.observedAt,availableAt:r.availableAt,
     },{for:[{kind:'source-custody-claim-v1',id:r.id,sha256:r.sha256}]})));
 }
+/**
+ * Reuse the SAME native SignCell original-byte custody cells for market
+ * outcome claims, joint Bayes proofs and robust joint-scenario derivations.
+ *
+ * This checks only claim shape and time. Operations must independently READ
+ * original bytes, verify SHA-256 and publisher authority before any of these
+ * cells can be committed. Nothing here authenticates a venue fill or a P&L.
+ */
+export function outcomeSourceReceiptCells({
+  sourceObservationIds,sourceReceipts,at,
+}={}) {
+  if(!instant(at)||!Array.isArray(sourceObservationIds)||
+     sourceObservationIds.length<1||sourceObservationIds.length>2048||
+     sourceObservationIds.some(id=>!named(id))||
+     new Set(sourceObservationIds).size!==sourceObservationIds.length)
+    throw new TypeError('distinct, bounded market outcome source IDs and receiver clock required');
+  const byId=checkedSourceReceipts(sourceObservationIds,at,sourceReceipts);
+  return sourceReceiptCellsOf([...byId.values()]);
+}
+
 function checkedSourceReceipts(premiseIds,at,receipts){
   if(!Array.isArray(receipts)||receipts.length!==premiseIds.length)
     throw new TypeError('exactly one original-byte receipt per conditional premise required');
