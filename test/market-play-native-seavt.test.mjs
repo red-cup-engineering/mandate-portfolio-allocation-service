@@ -5,7 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {marketGame} from '../src/market-game.mjs';
 import {hashPosition} from '@red-cup-engineering/gaming/running/rules';
-import {signCellOfSeavt,compareAbsoluteSeavtClocks} from
+import {cell} from '@red-cup-engineering/signcell/cell';
+import {seavtOfSignCell,signCellOfSeavt,compareAbsoluteSeavtClocks} from
   '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 import {
  readMarketPlay,appendMarketMove,seavtOfMarketMove,
@@ -112,5 +113,23 @@ test('failed one-time migration leaves original evidence unchanged',async()=>{
   await assert.rejects(migrateLegacyMarketPlay(fx.path));
   assert.equal(readFileSync(fx.path,'utf8'),broken);
   await assert.rejects(readMarketPlay(fx.path));
+ }finally{fx.close();}
+});
+
+test('self-addressed fabricated evidence cannot authorize a market-game move',async()=>{
+ const fx=fixture();
+ try{
+  const initial=marketGame.initialPosition();
+  const canonical=seavtOfMarketMove(initial,0,obs('one',at));
+  const original=signCellOfSeavt(canonical);
+  const forged=cell(original.subject,original.predicate,original.object,{
+   for:[{...original.for[0],grant:'orders:live',independentSourceAccepted:true}],
+  });
+  const selfAddressed=seavtOfSignCell(forged,canonical.t);
+  // Both rows pass native SEN admission and individually match their OWN SCA
+  // addresses. Only the canonical writer's full evidence identity refuses it.
+  assert.deepEqual(signCellOfSeavt(selfAddressed),forged);
+  writeFileSync(fx.path,JSON.stringify(selfAddressed)+'\n');
+  await assert.rejects(readMarketPlay(fx.path),/causal chain/);
  }finally{fx.close();}
 });
