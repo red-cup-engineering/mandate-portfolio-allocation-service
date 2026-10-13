@@ -15,7 +15,7 @@ import {knowledgeJoin} from '@red-cup-engineering/signchain/bilattice';
 import {deduceSettlementInterval} from './settlement-modal.mjs';
 import {conditionMarketForecastOnSignal} from './market-information-value.mjs';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
-import {readMarketOutcomeEvidence} from './outcome-evidence-border.mjs';
+import {readMarketOutcomeEvidence,classifyMarketOutcome} from './outcome-evidence-border.mjs';
 
 const identity=s=>typeof s==='string'&&s.trim().length>0;
 const available=t=>typeof t==='string'&&Number.isFinite(Date.parse(t));
@@ -250,20 +250,44 @@ export function projectConditionalRobustActionSign({
  */
 export function projectMarketOutcomeEvidenceSigns({state,at}={}) {
   const reading=readMarketOutcomeEvidence(state,at);
+  const claimRows=new Map();
+  for(const original of Object.values(state.outcomes)){
+    if(typeof original?.id!=='string'||!original.id||claimRows.has(original.id))
+      throw new TypeError('unique original economic-outcome claim ID required');
+    claimRows.set(original.id,original);
+  }
+  // Attribution belongs to each original observation. Reusing a group-level
+  // sourceLinked flag would retroactively reclassify earlier claim witnesses
+  // whenever a later confirming claim acquires independent source custody.
+  const originalWitness=claimId=>{
+    const original=claimRows.get(claimId);
+    if(!original)throw new TypeError('outcome witness lacks its original claim');
+    const decision=state.decisions[original.decisionId];
+    const order=decision?.orders?.find(o=>o.id===original.orderId);
+    const classification=classifyMarketOutcome({
+      outcome:original,decision,order,
+      sourceObservation:state.observations[original.sourceObservationId],
+    });
+    const linked=classification.status==='source-linked-claim';
+    return {
+      claimId,observedAt:original.observedAt,sourceLinked:linked,
+      sourceObservationIds:linked?[classification.sourceObservationId]:[],
+    };
+  };
   const projected=[];
   for(const event of reading.events) {
     for(const claim of event.claims) {
       const forWitnesses=claim.claimIds.map(claimId=>({
-        kind:'economic-outcome-claim',claimId,receipt:event.receipt,
-        sourceObservationIds:claim.sourceObservationIds,
-        sourceLinked:claim.sourceLinked,
+        kind:'economic-outcome-claim',receipt:event.receipt,
+        ...originalWitness(claimId),
       }));
       const againstWitnesses=event.claims
         .filter(other=>other.pnlCents!==claim.pnlCents)
         .flatMap(other=>other.claimIds.map(claimId=>({
-          kind:'opposing-economic-outcome-claim',claimId,
+          kind:'opposing-economic-outcome-claim',
           receipt:event.receipt,claimedPnlCents:other.pnlCents,
           rule:'one-economic-event-has-one-realized-pnl-value',
+          ...originalWitness(claimId),
         })));
       const joined=knowledgeJoin(
         evidence({for:forWitnesses,against:[]}),
