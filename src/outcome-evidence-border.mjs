@@ -8,9 +8,7 @@
  * external byte/source receiving is a separate Operations duty.
  */
 const named=x=>typeof x==='string'&&x.trim().length>0;
-const instant=x=>typeof x==='string'&&
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(x)&&
-  Number.isFinite(Date.parse(x));
+import { isAbsoluteSeavtClock as instant, compareAbsoluteSeavtClocks as compareTime } from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 const digest=x=>typeof x==='string'&&/^sha256:[0-9a-f]{64}$/.test(x);
 
 export function classifyMarketOutcome({outcome,decision,order,sourceObservation}={}) {
@@ -19,16 +17,16 @@ export function classifyMarketOutcome({outcome,decision,order,sourceObservation}
   if(!Number.isSafeInteger(outcome.pnlCents))
     throw new TypeError('outcome P&L must be integer USD cents');
   if(!instant(outcome.observedAt)||!instant(decision.at)||
-     Date.parse(outcome.observedAt)<Date.parse(decision.at))
+     compareTime(outcome.observedAt,decision.at)<0)
     throw new RangeError('a realized outcome cannot precede the decision');
   if(!named(outcome.sourceObservationId))
     return Object.freeze({status:'unqualified-claim',reason:'no original source observation',sourceAuthenticated:false});
   const observed=sourceObservation, v=observed?.value;
   if(!observed||!named(observed.id)||observed.id!==outcome.sourceObservationId||
      !named(observed.source)||!instant(observed.observedAt)||
-     !instant(observed.availableAt)||Date.parse(observed.availableAt)>Date.parse(observed.observedAt)||
-     Date.parse(observed.observedAt)<Date.parse(decision.at)||
-     Date.parse(observed.observedAt)>Date.parse(outcome.observedAt)||
+     !instant(observed.availableAt)||compareTime(observed.availableAt,observed.observedAt)>0||
+     compareTime(observed.observedAt,decision.at)<0||
+     compareTime(observed.observedAt,outcome.observedAt)>0||
      v?.kind!=='venue-realized-pnl-v1'||v.decisionId!==outcome.decisionId||
      v.orderId!==outcome.orderId||v.principal!==decision.principal||
      v.venue!==order.venue||v.instrument!==order.instrument||
@@ -63,14 +61,14 @@ export function readMarketOutcomeEvidence(state, asOf) {
   if(!instant(asOf) || !state || typeof state!=='object' ||
      !state.decisions || !state.outcomes || !state.observations)
     throw new TypeError('point-in-time market evidence state required');
-  const end=Date.parse(asOf),byReceipt=new Map();
+  const byReceipt=new Map();
   const originalRows=Object.values(state.outcomes);
   if(originalRows.length>100000)
     throw new RangeError('bounded outcome evidence population required');
   for(const row of originalRows) {
     if(!instant(row?.observedAt))
       throw new TypeError('each outcome must carry an absolute observation clock');
-    if(Date.parse(row.observedAt)>end) continue;
+    if(compareTime(row.observedAt,asOf)>0) continue;
     const decision=state.decisions[row.decisionId];
     const order=decision?.orders?.find(o=>o.id===row.orderId);
     if(!order) throw new TypeError('outcome evidence must cite its existing planned order');

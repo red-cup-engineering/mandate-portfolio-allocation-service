@@ -175,3 +175,55 @@ test('the same strategy label in two principals cannot silently pool economic ou
  assert.equal(r.performanceByPrincipal['another-principal']
   ['measured-strategy'].unverifiedClaimedPnlCents,-30);
 });
+
+
+test('sub-millisecond ordering cannot admit outcome evidence before a decision', () => {
+ const t0='2026-10-12T14:00:00.000000001Z';
+ const t1='2026-10-12T14:00:00.000000002Z';
+ const decisionNow={...decision,at:t1};
+ const atStart={...outcome,observedAt:t0,sourceObservationId:undefined};
+ assert.throws(()=>classifyMarketOutcome({outcome:atStart,decision:decisionNow,order}),
+   /cannot precede the decision/);
+ const atDecision={...atStart,observedAt:t1};
+ assert.equal(classifyMarketOutcome({outcome:atDecision,decision:decisionNow,order}).status,'unqualified-claim');
+});
+
+test('original venue source must respect exact availability, observation and outcome clocks', () => {
+ const t0='2026-10-12T14:00:00.000000001Z';
+ const t1='2026-10-12T14:00:00.000000002Z';
+ const t2='2026-10-12T14:00:00.000000003Z';
+ const d={...decision,at:t0};
+ const o={...outcome,observedAt:t2};
+ const source={...sourceObservation,availableAt:t0,observedAt:t1};
+ assert.equal(classifyMarketOutcome({outcome:o,decision:d,order,sourceObservation:source}).status,'source-linked-claim');
+ for (const changed of [
+   {...source,availableAt:t2},
+   {...source,observedAt:'2026-10-12T14:00:00.000000004Z'},
+   {...source,observedAt:'2026-02-30T14:00:00Z'},
+ ]) assert.throws(()=>classifyMarketOutcome({outcome:o,decision:d,order,sourceObservation:changed}),
+   /source-bound outcome differs/);
+});
+
+test('Kalshi, Alpaca and EVM/GMX claimed results cannot leak across nanosecond replay cuts', () => {
+ const at='2026-10-12T14:00:00.000000001Z';
+ const future='2026-10-12T14:00:00.000000002Z';
+ for(const venue of ['kalshi','alpaca','evm']) {
+  const s=marketState();
+  s.decisions[decisionId].orders[0].venue=venue;
+  s.decisions[decisionId].orders[0].instrument='TEST';
+  s.decisions[decisionId].at='2026-10-12T13:59:59Z';
+  s.observations['source-1']={
+    ...sourceObservation,availableAt:'2026-10-12T13:59:59Z',observedAt:at,
+    value:{...sourceObservation.value,venue,instrument:'TEST'}
+  };
+  add(s,{...outcome,observedAt:at});
+  add(s,{...outcome,id:'future-contrary',observedAt:future,pnlCents:-25,sourceObservationId:undefined});
+  const early=readMarketOutcomeEvidence(s,at);
+  assert.equal(early.events.length,1);
+  assert.equal(early.disputes.length,0);
+  assert.equal(early.events[0].claims[0].sourceLinked,true);
+  const later=readMarketOutcomeEvidence(s,future);
+  assert.equal(later.disputes.length,1);
+  assert.equal(later.events[0].claims.length,2);
+ }
+});
