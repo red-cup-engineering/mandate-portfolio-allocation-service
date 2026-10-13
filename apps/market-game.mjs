@@ -1,58 +1,55 @@
 #!/usr/bin/env node
 /** Finite, streaming market-game runs. Never schedules or places an order. */
-import { statSync, appendFileSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, existsSync } from 'node:fs';
+import { statSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync, existsSync } from 'node:fs';
 import { marketGame, planMarket } from '../src/market-game.mjs';
 import {readMarketOutcomeEvidence} from '../src/outcome-evidence-border.mjs';
 import {projectMarketOutcomeEvidenceSigns} from '../src/settlement-sign-evidence.mjs';
 import {marketGameSeavt} from '../src/scenario-sign-history.mjs';
 import { readPublicObservation, readNewsObservations, alpacaNewsObservation, newswireObservation, evmLogObservation, kalshiMacroObservation } from '../src/public-observations.mjs';
 import { hashPosition } from '@red-cup-engineering/gaming/running/rules';
-import { readMarketPlay as fold } from '../src/play.mjs';
+import { readMarketPlay as fold, appendMarketMove, migrateLegacyMarketPlay } from '../src/play.mjs';
 import { createResearchPublication, researchObservationMoves } from '../src/research-publication.mjs';
 
 const args = process.argv.slice(2); const command = args.shift();
 const opt = (name) => { const i = args.indexOf(`--${name}`); return i < 0 ? undefined : args[i + 1]; };
 const boundedJson = (path) => { const s = statSync(path); if (!s.isFile() || s.size > 1048576) throw new RangeError('JSON input must be a regular file <= 1 MiB'); return JSON.parse(readFileSync(path, 'utf8')); };
-const appendEntry = (path, entry) => {
-  const line = JSON.stringify(entry) + '\n';
-  if (Buffer.byteLength(line) > 1048576 || statSync(path).size + Buffer.byteLength(line) > 32 * 1048576) throw new RangeError('play storage limit; retain the completed play and start a new bounded run');
-  appendFileSync(path, line);
-};
 async function main() {
+  if (command === 'migrate') return migrateLegacyMarketPlay(opt('record'));
   if (command === 'news') {
     const feeds = boundedJson(opt('feeds')); const cursor = opt('cursor') && existsSync(opt('cursor')) ? boundedJson(opt('cursor')) : { version: 2, feeds: {} };
-    const { state, seq: last } = await fold(opt('record')); let seq = last, at = state;
+    const { state, seq: last, lastReceivedAt } = await fold(opt('record')); let seq = last, at = state, clock = lastReceivedAt;
     const result = await readNewsObservations({ feeds, cursor });
-    for (const intent of result.moves) { at = marketGame.extend(at, intent).state; appendEntry(opt('record'), { seq: ++seq, intent, ts: Date.parse(intent.observation.observedAt) }); }
+    for (const intent of result.moves) { const next = marketGame.extend(at, intent).state; const receivedAt = new Date().toISOString(); const row = appendMarketMove(opt('record'), at, ++seq, intent, receivedAt, clock); clock = row.t; at = next; }
     if (opt('cursor')) writeFileSync(opt('cursor'), JSON.stringify(result.cursor) + '\n');
     return { admitted: seq - last, obstructions: result.obstructions };
   }
   if (command === 'collect') {
     const config = boundedJson(opt('sources')); if (!Array.isArray(config) || config.length > 20) throw new RangeError('at most 20 public sources per pass');
-    const failures = []; const { state, seq: last } = await fold(opt('record')); let seq = last, position = state;
+    const failures = []; const { state, seq: last, lastReceivedAt } = await fold(opt('record')); let seq = last, position = state, clock = lastReceivedAt;
     for (const source of config) {
       try { const intent = await readPublicObservation(source); const next = marketGame.extend(position, intent).state;
-        appendEntry(opt('record'), { seq: seq + 1, intent, ts: Date.parse(intent.observation.observedAt) }); seq += 1; position = next; }
+        const receivedAt = new Date().toISOString(); const row = appendMarketMove(opt('record'), position, seq + 1, intent, receivedAt, clock); clock = row.t; seq += 1; position = next; }
       catch (error) { failures.push({ source: source.source, reason: error.message }); }
     }
     return { admitted: seq - last, failures };
   }
   if (command === 'ingest') {
-    const { state, seq: last } = await fold(opt('record')); const at = opt('at') ?? new Date().toISOString();
+    const { state, seq: last, lastReceivedAt } = await fold(opt('record')); const at = opt('at') ?? new Date().toISOString();
     const input = boundedJson(opt('input')); const format = opt('format');
     if (format === 'koios-research') {
       const moves = researchObservationMoves(input, at); let next = state;
-      for (const move of moves) next = marketGame.extend(next, move).state;
-      for (let i = 0; i < moves.length; i++) appendEntry(opt('record'), { seq: last + i + 1, intent: moves[i], ts: Date.parse(at) });
+      const admitted = [];
+      for (const move of moves) { const before = next; next = marketGame.extend(next, move).state; admitted.push({ before, move }); }
+      let clock = lastReceivedAt;
+      for (let i = 0; i < admitted.length; i++) { const receivedAt = new Date().toISOString(); const row = appendMarketMove(opt('record'), admitted[i].before, last + i + 1, admitted[i].move, receivedAt, clock); clock = row.t; }
       return { admitted: moves.length };
     }
     const intent = format === 'alpaca-news' ? alpacaNewsObservation(input, at) : format === 'newswire' ? newswireObservation(input, at) : format === 'evm-log' ? evmLogObservation(input, at) : format === 'kalshi-macro' ? kalshiMacroObservation(input, at) : input;
-    // Validate the extension before appending to the only persisted carrier.
-    marketGame.extend(state, intent);
-    appendEntry(opt('record'), { seq: last + 1, intent, ts: Date.parse(at) });
+    // Admit and persist the same canonical witnessed SEAVT carrier.
+    appendMarketMove(opt('record'), state, last + 1, intent, new Date().toISOString(), lastReceivedAt);
     return { admitted: intent.kind };
   }
-  const { state, seq, rows } = await fold(opt('record'));
+  const { state, seq, rows, lastReceivedAt } = await fold(opt('record'));
   if (command === 'research') {
     const research = createResearchPublication(state, boundedJson(opt('assignment')), opt('at') ?? new Date().toISOString());
     if (opt('output')) { writeFileSync(opt('output'), JSON.stringify(research, null, 2) + '\n', { flag: 'wx' }); return { packetId: research.id, facts: research.facts.length, sources: research.observations.length, output: opt('output') }; }
@@ -99,14 +96,14 @@ async function main() {
   if (command === 'plan') {
     const policy = boundedJson(opt('policy')); const at = opt('at') ?? new Date().toISOString();
     const decision = planMarket(state, policy, at);
-    if (args.includes('--append')) appendEntry(opt('record'), { seq: seq + 1, intent: { kind: 'decide', expectedPosition: hashPosition(state), policy, at }, ts: Date.parse(at) });
+    if (args.includes('--append')) appendMarketMove(opt('record'), state, seq + 1, { kind: 'decide', expectedPosition: hashPosition(state), policy, at }, new Date().toISOString(), lastReceivedAt);
     return decision;
   }
-  throw new Error('usage: market-game replay|seavt|evidence|plan|collect|news|research|ingest --record play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
+  throw new Error('usage: market-game migrate|replay|seavt|evidence|plan|collect|news|research|ingest --record native-seavt-play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
 }
 let lock;
 try {
-  if (['collect', 'news', 'ingest'].includes(command) || args.includes('--append')) {
+  if (['collect', 'news', 'ingest', 'migrate'].includes(command) || args.includes('--append')) {
     const path = opt('record'); if (!path) throw new TypeError('--record required');
     const owned = `${path}.lock`; const fd = openSync(owned, 'wx', 0o600); lock = owned; closeSync(fd);
   }

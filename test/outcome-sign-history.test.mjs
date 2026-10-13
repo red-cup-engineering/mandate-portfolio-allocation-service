@@ -79,8 +79,14 @@ test('later source claims cannot rewrite the earlier evidence filtration',()=>{
  const late=projectMarketOutcomeEvidenceSigns({state:s,at:'2026-10-10T00:00:00Z'});
  assert.equal(early.disputedEconomicEvents,0);
  assert.equal(late.disputedEconomicEvents,1);
- assert.notEqual(early.claims[0].address,late.claims.find(x=>
-  x.proposition.claimedPnlCents===5).address);
+ const first=early.claims[0];
+ const revised=late.claims.find(x=>x.proposition.claimedPnlCents===5);
+ assert.equal(first.address,revised.address,
+  'adding opposition changes knowledge, never the triple content address');
+ assert.deepEqual(first.cell.for,revised.cell.for,
+  'later opposition must not rewrite the original positive witness');
+ assert.equal(first.cell.against.length,0);
+ assert.equal(revised.cell.against.length,1);
 });
 test('empty evidence neither creates a revision nor a fictitious SignGraph',()=>{
  const empty=composeMarketOutcomeEvidenceHistory({
@@ -116,4 +122,44 @@ test('outcome receiving reuses canonical SignCell custody used by Bayes and robu
  assert.throws(()=>outcomeSourceReceiptCells({
   ...receipt(),sourceReceipts:[{...original,availableAt:'2026-10-10T00:00:00Z'}],
  }),/bounded absolute clocks/);
+});
+
+test('later corroboration adds its own source witness without reclassifying the first',()=>{
+ const source={
+  id:'source-1',source:'urn:synthetic:kalshi',
+  availableAt:'2026-10-08T04:08:00Z',
+  observedAt:'2026-10-08T04:09:00Z',
+  value:{kind:'venue-realized-pnl-v1',
+   decisionId:'decision',orderId:'order',principal:'test-principal',
+   venue:'kalshi',instrument:'CONTRACT',receipt:'single-venue-economic-event',
+   currency:'USD',pnlCents:5,sourceDigest:'sha256:'+'a'.repeat(64)},
+ };
+ const original=claim('first',5);
+ const corroboration={...claim('second',5,'2026-10-08T04:10:00Z'),
+   sourceObservationId:source.id};
+ const s=state([original,corroboration]);
+ s.observations[source.id]=source;
+ const early=projectMarketOutcomeEvidenceSigns({state:s,at:'2026-10-08T04:05:00Z'});
+ const later=projectMarketOutcomeEvidenceSigns({state:s,at:'2026-10-08T05:00:00Z'});
+ const one=early.claims[0],two=later.claims[0];
+ assert.equal(one.address,two.address);
+ assert.equal(one.cell.for.length,1);
+ assert.equal(two.cell.for.length,2);
+ assert.deepEqual(one.cell.for[0],two.cell.for.find(w=>w.claimId==='first'));
+ assert.deepEqual(two.cell.for.find(w=>w.claimId==='first').sourceObservationIds,[]);
+ assert.equal(two.cell.for.find(w=>w.claimId==='first').sourceLinked,false);
+ assert.deepEqual(two.cell.for.find(w=>w.claimId==='second').sourceObservationIds,['source-1']);
+ assert.equal(two.cell.for.find(w=>w.claimId==='second').sourceLinked,true);
+ assert.equal(two.cell.against.length,0);
+ assert.equal(later.tradeEligible,false);
+});
+
+test('future reused claim identity cannot rewrite a historical point-in-time reading',()=>{
+ const s=state([claim('first',5)]);
+ s.outcomes.forgedFuture={...claim('first',9,'2026-10-09T04:00:00Z')};
+ const earlier=projectMarketOutcomeEvidenceSigns({state:s,at:'2026-10-08T05:00:00Z'});
+ assert.equal(earlier.claims.length,1);
+ assert.equal(earlier.claims[0].cell.for.length,1);
+ assert.throws(()=>projectMarketOutcomeEvidenceSigns({state:s,at:'2026-10-10T00:00:00Z'}),
+  /unique original economic-outcome claim ID/);
 });

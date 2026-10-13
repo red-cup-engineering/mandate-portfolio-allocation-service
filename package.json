@@ -39,7 +39,8 @@
     "@red-cup-engineering/signgraph": "workspace:*",
     "@red-cup-engineering/signcraft": "workspace:*",
     "@red-cup-engineering/metrologic": "workspace:*",
-    "@red-cup-engineering/semiotic-eavt-services-section": "workspace:*"
+    "@red-cup-engineering/semiotic-eavt-services-section": "workspace:*",
+    "@red-cup-engineering/eavt-services-section": "workspace:*"
   },
   "bin": {
     "market-game": "./apps/market-game.mjs",

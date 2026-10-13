@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {address,told} from '@red-cup-engineering/signcell/cell';
+import {eavtId} from '@red-cup-engineering/eavt-services-section/row';
 import {
- seavtOfSignCell,signCellOfSeavt,
+ seavtOfSignCell,signCellOfSeavt,compareAbsoluteSeavtClocks,
 } from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
+import {logOfSeavtRows} from '@red-cup-engineering/signchain/log';
 import {marketGameSeavt} from '../src/scenario-sign-history.mjs';
 
 const instant=(h,m)=>`2026-10-12T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00Z`;
@@ -98,20 +100,22 @@ test('FOUR contradiction has stable SCA identity but time cannot precede its opp
  const late=marketGameSeavt(inputs,instant(21,55));
  const predicate='has-claimed-economic-pnl-cents';
  const original=cells(early).find(x=>x.predicate===predicate&&x.object.claimedPnlCents===25);
- const revised=cells(late).find(x=>x.predicate===predicate&&x.object.claimedPnlCents===25);
+ const revised=cells(late).filter(x=>x.predicate===predicate&&
+   x.object.claimedPnlCents===25).at(-1);
  assert.ok(original&&revised);
  assert.deepEqual(told(original),[true,false]);
  assert.deepEqual(told(revised),[true,true]);
  assert.equal(address(original),address(revised));
  const oldRow=early.find(r=>signCellOfSeavt(r).predicate===predicate);
- const newRow=late.find(r=>{
+ const versions=late.filter(r=>{
   const c=signCellOfSeavt(r);
   return c.predicate===predicate&&c.object.claimedPnlCents===25;
  });
  assert.equal(oldRow.t,instant(21,30));
- assert.equal(newRow.t,instant(21,40),
-  'contrary evidence from 21:40 must not be backdated to the initial 21:30 claim');
- assert.notDeepEqual(oldRow.v,newRow.v,'SEAVT preserves knowledge growth');
+ assert.deepEqual(versions.map(r=>r.t),[instant(21,30),instant(21,40)],
+  'the original one-sided claim must survive beside its later disputed version');
+ assert.deepEqual(versions[0],oldRow);
+ assert.notDeepEqual(versions[0].v,versions[1].v,'SEAVT preserves knowledge growth');
 });
 test('unpublished observations, invalid clocks, and unbounded games refuse native witnessing',()=>{
  const invalid=state();
@@ -125,4 +129,148 @@ test('unpublished observations, invalid clocks, and unbounded games refuse nativ
   instrument:'ACME',
  };
  assert.throws(()=>marketGameSeavt(huge,instant(21,55)),/10000 original observations/);
+});
+
+
+test('cross-venue FOUR history does not backdate a nanosecond-later contradiction',()=>{
+ const inputs=state();
+ inputs.outcomes.opposed.observedAt='2026-10-12T21:30:00.000000001Z';
+ const t0='2026-10-12T21:30:00Z',t1='2026-10-12T21:30:00.000000001Z';
+ const earlier=marketGameSeavt(inputs,t0);
+ const later=marketGameSeavt(inputs,t1);
+ const earlierCells=cells(earlier).filter(c=>c.predicate==='has-claimed-economic-pnl-cents');
+ const laterCells=cells(later).filter(c=>c.predicate==='has-claimed-economic-pnl-cents');
+ assert.equal(earlierCells.length,1);
+ assert.deepEqual(told(earlierCells[0]),[true,false]);
+ assert.ok(laterCells.some(c=>c.object.claimedPnlCents===25&&told(c).every(Boolean)));
+ const original=earlier.find(r=>signCellOfSeavt(r).predicate==='has-claimed-economic-pnl-cents');
+ const amended=later.find(r=>signCellOfSeavt(r).predicate==='has-claimed-economic-pnl-cents'&&
+   signCellOfSeavt(r).object.claimedPnlCents===25);
+ assert.equal(original.t,t0);
+ assert.equal(amended.t,t0,'earlier claim remains an original observation');
+ const superseding=later.find(r=>r.t===t1&&
+   signCellOfSeavt(r).predicate==='has-claimed-economic-pnl-cents'&&
+   signCellOfSeavt(r).object.claimedPnlCents===25);
+ assert.ok(superseding);
+ assert.deepEqual(told(signCellOfSeavt(superseding)),[true,true]);
+});
+test('cross-venue SEAVT never admits evidence first available a nanosecond after observation',()=>{
+ const inputs=state();
+ inputs.observations['original-1'].availableAt='2026-10-12T21:25:00.000000001Z';
+ assert.throws(()=>marketGameSeavt(inputs,instant(21,55)),/unpublished/);
+});
+
+test('historical cross-venue SEAVT is prefix-invariant and directly replayable by native SignChain',()=>{
+ const inputs=state(),all=marketGameSeavt(inputs,instant(21,55));
+ const earlyCut=instant(21,30),middleCut=instant(21,35);
+ const early=marketGameSeavt(inputs,earlyCut);
+ const middle=marketGameSeavt(inputs,middleCut);
+ const prefix=cut=>all.filter(row=>compareAbsoluteSeavtClocks(row.t,cut)<=0);
+ assert.deepEqual(early,prefix(earlyCut));
+ assert.deepEqual(middle,prefix(middleCut));
+ const pre=logOfSeavtRows(all,{asOf:middleCut});
+ const full=logOfSeavtRows(all);
+ const p={subject:'one-economic-event',predicate:'has-claimed-economic-pnl-cents'};
+ const earlyCells=pre.cells(p),lateCells=full.cells(p);
+ assert.equal(earlyCells.length,1);
+ assert.deepEqual(told(earlyCells[0]),[true,false]);
+ assert.equal(lateCells.length,2);
+ const updated=lateCells.find(x=>x.object.claimedPnlCents===25);
+ assert.ok(updated);
+ assert.deepEqual(told(updated),[true,true]);
+ assert.equal(address(earlyCells[0]),address(updated));
+ const original=full.rows.find(x=>x.side==='for'&&x.predicate===p.predicate&&
+    x.object.claimedPnlCents===25);
+ const opposed=full.rows.find(x=>x.side==='against'&&x.predicate===p.predicate&&
+    x.object.claimedPnlCents===25);
+ assert.equal(original.observedAt,instant(21,30));
+ assert.equal(opposed.observedAt,instant(21,40));
+ assert.equal(full.rows.filter(x=>x.side==='for'&&x.predicate===p.predicate&&
+    x.object.claimedPnlCents===25).length,1,
+    'cumulative snapshots must not manufacture duplicate witnesses');
+ assert.equal(full.rows.every(x=>x.witness!==undefined),true);
+});
+
+test('same-instant opposed claims enter one SEAVT cut without an invented precedence',()=>{
+ const inputs=state();
+ inputs.outcomes.opposed.observedAt=instant(21,30);
+ const at=instant(21,30),rows=marketGameSeavt(inputs,at);
+ const claims=rows.filter(row=>signCellOfSeavt(row).predicate==='has-claimed-economic-pnl-cents');
+ assert.equal(claims.length,2);
+ assert.ok(claims.every(row=>row.t===at));
+ assert.ok(claims.every(row=>told(signCellOfSeavt(row)).every(Boolean)));
+});
+
+test('independent economic events retain their own admission clocks',()=>{
+ const inputs=state();
+ inputs.outcomes.other={
+   id:'third',decisionId:'decision-1',orderId:'order-1',
+   receipt:'separate-economic-event',observedAt:instant(21,45),pnlCents:3,
+ };
+ const before=marketGameSeavt(inputs,instant(21,40));
+ const after=marketGameSeavt(inputs,instant(21,55));
+ assert.deepEqual(before,after.filter(row=>compareAbsoluteSeavtClocks(row.t,instant(21,40))<=0));
+ const separate=after.find(row=>signCellOfSeavt(row).subject==='separate-economic-event');
+ assert.equal(separate.t,instant(21,45));
+ assert.deepEqual(told(signCellOfSeavt(separate)),[true,false]);
+});
+
+test('late independent corroboration never rewrites the provenance or clock of the first telling',()=>{
+ const inputs=state();
+ inputs.outcomes['claim-1'].sourceObservationId=undefined;
+ inputs.outcomes.opposed={
+   ...inputs.outcomes.opposed,id:'confirm',pnlCents:25,
+   sourceObservationId:'original-1',
+ };
+ const early=marketGameSeavt(inputs,instant(21,30));
+ const later=marketGameSeavt(inputs,instant(21,40));
+ const byPnl=rows=>rows.filter(row=>{
+   const c=signCellOfSeavt(row);
+   return c.predicate==='has-claimed-economic-pnl-cents'&&
+     c.object.claimedPnlCents===25;
+ });
+ const first=byPnl(early),both=byPnl(later);
+ assert.equal(first.length,1);
+ assert.equal(both.length,2);
+ assert.equal(first[0].t,instant(21,30));
+ assert.equal(both[1].t,instant(21,40));
+ assert.equal(address(signCellOfSeavt(both[0])),
+   address(signCellOfSeavt(both[1])));
+ const source0=signCellOfSeavt(first[0]).for.find(w=>w.claimId==='claim-1');
+ const source1=signCellOfSeavt(both[1]).for.find(w=>w.claimId==='claim-1');
+ const confirm=signCellOfSeavt(both[1]).for.find(w=>w.claimId==='confirm');
+ assert.deepEqual(source0,source1);
+ assert.equal(source0.sourceLinked,false);
+ assert.deepEqual(source0.sourceObservationIds,[]);
+ assert.equal(confirm.sourceLinked,true);
+ assert.deepEqual(confirm.sourceObservationIds,['original-1']);
+ const log=logOfSeavtRows(later);
+ const rows=log.where({subject:'one-economic-event',predicate:'has-claimed-economic-pnl-cents'});
+ assert.equal(rows.filter(r=>r.object.claimedPnlCents===25).length,2);
+ assert.deepEqual(rows.filter(r=>r.object.claimedPnlCents===25).map(r=>r.observedAt),
+   [instant(21,30),instant(21,40)]);
+});
+
+test('economic claim identity cannot be reused across independent historical events',()=>{
+ const inputs=state();
+ inputs.outcomes.other={
+   ...inputs.outcomes.opposed,receipt:'another-economic-event',
+   id:'claim-1',observedAt:instant(21,45),
+ };
+ assert.throws(()=>marketGameSeavt(inputs,instant(21,55)),
+   /distinct claim and event identities/);
+});
+
+test('equal-time financial tellings have canonical EAVT ordering independent of source map order',()=>{
+ const one=state();
+ one.outcomes.opposed.observedAt=instant(21,30);
+ const two=structuredClone(one);
+ two.outcomes=Object.fromEntries(Object.entries(two.outcomes).reverse());
+ const a=marketGameSeavt(one,instant(21,55));
+ const b=marketGameSeavt(two,instant(21,55));
+ assert.deepEqual(a.map(eavtId),b.map(eavtId));
+ const at=instant(21,30);
+ const ids=a.filter(row=>row.t===at).map(eavtId);
+ assert.deepEqual(ids,[...ids].sort(),
+   'concurrent evidence is ordered by the native content address, not JSON spelling');
 });

@@ -16,14 +16,13 @@ import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/sign
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 import {projectMarketOutcomeEvidenceSigns} from './settlement-sign-evidence.mjs';
 import {seavtOfSignCell} from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
+import {eavtId} from '@red-cup-engineering/eavt-services-section/row';
 import {
   finiteLawExpectation,extremalTotalVariationExpectation,upperTailMeanOfFiniteLaw,
 } from '@red-cup-engineering/metrologic/number/finite-law';
 
 const named=x=>typeof x==='string'&&x.trim().length>0;
-const instant=x=>typeof x==='string'&&
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(x)&&
-  Number.isFinite(Date.parse(x));
+import {isAbsoluteSeavtClock as instant,compareAbsoluteSeavtClocks as compareTime} from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 const digest=x=>typeof x==='string'&&/^sha256:[0-9a-f]{64}$/.test(x);
 const same=(a,b)=>coincides(a,b);
 
@@ -66,11 +65,11 @@ function requiredProjection(p){
      !instant(p.conditionalEvidence.observationAvailableAt))
     throw new TypeError('one received, addressable, causal conditional SignCell proof required');
   const e=p.conditionalEvidence;
-  if(Date.parse(e.priorObservedAt)>Date.parse(e.priorAvailableAt)||
-     Date.parse(e.priorAvailableAt)>Date.parse(e.observationObservedAt)||
-     Date.parse(e.modelAvailableAt)>Date.parse(e.observationObservedAt)||
-     Date.parse(e.observationObservedAt)>Date.parse(e.observationAvailableAt)||
-     Date.parse(e.observationAvailableAt)>Date.parse(p.at))
+  if(compareTime(e.priorObservedAt,e.priorAvailableAt)>0||
+     compareTime(e.priorAvailableAt,e.observationObservedAt)>0||
+     compareTime(e.modelAvailableAt,e.observationObservedAt)>0||
+     compareTime(e.observationObservedAt,e.observationAvailableAt)>0||
+     compareTime(e.observationAvailableAt,p.at)>0)
     throw new RangeError('conditional proof used a source that was not available before the observation/decision');
 }
 
@@ -88,8 +87,8 @@ export function scenarioSourceReceiptCells(projection,sourceReceipts){
     if(!named(r?.id)||ids.has(r.id)||!named(r.sourceRef)||
        !named(r.issuer)||!digest(r.sha256)||
        !instant(r.observedAt)||!instant(r.availableAt)||
-       Date.parse(r.observedAt)>Date.parse(r.availableAt)||
-       Date.parse(r.availableAt)>Date.parse(projection.at))
+       compareTime(r.observedAt,r.availableAt)>0||
+       compareTime(r.availableAt,projection.at)>0)
       throw new TypeError('unique source ID, named issuer, exact digest and bounded receipt times required');
     ids.add(r.id);byId.set(r.id,r);
   }
@@ -104,9 +103,9 @@ export function scenarioSourceReceiptCells(projection,sourceReceipts){
   for(const want of expected){
     const r=byId.get(want.id);
     if(want.observedAt!==undefined &&
-       Date.parse(r.observedAt)!==Date.parse(want.observedAt))
+       compareTime(r.observedAt,want.observedAt)!==0)
       throw new TypeError('source observation clock disagrees with its conditional proof');
-    if(Date.parse(r.availableAt)!==Date.parse(want.availableAt))
+    if(compareTime(r.availableAt,want.availableAt)!==0)
       throw new TypeError('source availability clock disagrees with its conditional proof');
   }
   return sourceReceiptCellsOf([...byId.values()]);
@@ -231,8 +230,8 @@ function checkedSourceReceipts(premiseIds,at,receipts){
     if(!named(r?.id)||!allowed.has(r.id)||byId.has(r.id)||
       !named(r.sourceRef)||!named(r.issuer)||!digest(r.sha256)||
       !instant(r.observedAt)||!instant(r.availableAt)||
-      Date.parse(r.observedAt)>Date.parse(r.availableAt)||
-      Date.parse(r.availableAt)>Date.parse(at))
+      compareTime(r.observedAt,r.availableAt)>0||
+      compareTime(r.availableAt,at)>0)
       throw new TypeError('unique named premise receipt, authenticable digest and bounded absolute clocks required');
     byId.set(r.id,r);
   }
@@ -432,14 +431,14 @@ export function robustActionSourceReceiptCells(projection,sourceReceipts){
   const {forecast,ambiguity}=requiredRobustProjection(projection);
   const byId=checkedSourceReceipts(projection.premiseIds,projection.at,sourceReceipts);
   const first=byId.get(forecast.id);
-  if(Date.parse(first.observedAt)!==Date.parse(forecast.observedAt)||
-    Date.parse(first.availableAt)!==Date.parse(forecast.availableAt))
+  if(compareTime(first.observedAt,forecast.observedAt)!==0||
+    compareTime(first.availableAt,forecast.availableAt)!==0)
     throw new TypeError('original forecast receipt must match exact forecast observation and first-availability clocks');
   for(const id of forecast.evidenceIds)
-    if(Date.parse(byId.get(id).availableAt)>Date.parse(forecast.observedAt))
+    if(compareTime(byId.get(id).availableAt,forecast.observedAt)>0)
       throw new RangeError('forecast used evidence first available after model observation');
   for(const id of ambiguity.evidenceIds)
-    if(Date.parse(byId.get(id).availableAt)>Date.parse(ambiguity.observedAt))
+    if(compareTime(byId.get(id).availableAt,ambiguity.observedAt)>0)
       throw new RangeError('radius model used evidence first available after its observation');
   return sourceReceiptCellsOf([...byId.values()]);
 }
@@ -474,8 +473,8 @@ export function composeConditionalRobustActionHistory({
     const c=existing[0],o=c.object;
     if(o?.kind!=='prediction-market-source-receipt-v1'||
       !instant(o.observedAt)||!instant(o.availableAt)||
-      Date.parse(o.observedAt)>Date.parse(o.availableAt)||
-      Date.parse(o.availableAt)>Date.parse(projection.at)||
+      compareTime(o.observedAt,o.availableAt)>0||
+      compareTime(o.availableAt,projection.at)>0||
       !digest(o.sha256))
       throw new TypeError('preexisting source receipt is incomplete or later than inference');
     return c;
@@ -608,7 +607,7 @@ export function marketGameSeavt(state,asOf){
     !state.observations||!state.accounts||!state.quotes||
     !state.strategies||!state.decisions||!state.outcomes)
    throw new TypeError('point-in-time shared financial game with native SEAVT coordinates required');
- const cutoff=Date.parse(asOf);
+ const cutoff=asOf;
  const rows=[];
  const scope=[
   ['observations','market-game:observed-source-claim','source-unverified'],
@@ -626,7 +625,7 @@ export function marketGameSeavt(state,asOf){
  let count=0;
  const put=(c,at)=>{
    if(!instant(at))throw new TypeError('each financial SignCell needs an original absolute clock');
-   if(Date.parse(at)>cutoff)return;
+   if(compareTime(at,cutoff)>0)return;
    if(++count>10000)
      throw new RangeError('finite source projection exceeds 10000 original observations');
    rows.push(seavtOfSignCell(c,at));
@@ -637,10 +636,10 @@ export function marketGameSeavt(state,asOf){
        throw new TypeError('well-formed existing financial game identity required');
      const at=table==='decisions'?record.at:record.observedAt;
      if(!instant(at))throw new TypeError('game record lacks its original observation/decision clock');
-     if(Date.parse(at)>cutoff)continue;
+     if(compareTime(at,cutoff)>0)continue;
      if(table==='observations'&&
         (!instant(record.availableAt)||
-         Date.parse(record.availableAt)>Date.parse(at)))
+         compareTime(record.availableAt,at)>0))
        throw new RangeError('unpublished market evidence cannot enter a native SignCell');
      // These positive witnesses establish that the existing game ADMITTED an
      // input/proposal; they do not authenticate the issuer or cash account.
@@ -654,40 +653,53 @@ export function marketGameSeavt(state,asOf){
    const f=state.forecast;
    if(!named(f.id)||!instant(f.observedAt))
      throw new TypeError('shared forecast must carry its original clock and identity');
-   if(Date.parse(f.observedAt)<=cutoff)
+   if(compareTime(f.observedAt,cutoff)<=0)
      put(cell('market-game:forecast:'+f.id,
        'market-game:conditional-joint-scenario-law',f,{
          for:[{kind:'market-game-model-premise',conditional:true,
            sourceAuthenticated:false,orderEffect:false}],
        }),f.observedAt);
  }
- // Financial outcomes already have a true native FOUR representation in
- // the owning sign-evidence module. Do NOT create a second outcome cell.
- const outcome=projectMarketOutcomeEvidenceSigns({state,at:asOf});
- const eventClaims=new Map();
- for(const claim of outcome.claims){
-   const receipt=claim.proposition.receipt;
-   const ids=eventClaims.get(receipt)??new Set();
-   claim.claimIds.forEach(id=>ids.add(id));
-   eventClaims.set(receipt,ids);
+ // The market-game source is a finite, already-admitted observation history.
+ // Emit each original knowledge cut instead of only the final FOUR snapshot.
+ // Otherwise a later negative/positive witness erases the earlier one-sided
+ // state and no SignChain consumer can replay what was knowable at that time.
+ const byEvent=new Map(),ids=new Set();
+ for(const original of Object.values(state.outcomes)){
+   if(!instant(original?.observedAt))
+     throw new TypeError('native outcome evidence lacks its original absolute clock');
+   if(compareTime(original.observedAt,cutoff)>0)continue;
+   if(!named(original.receipt)||!named(original.id)||ids.has(original.id))
+     throw new TypeError('native outcome evidence needs distinct claim and event identities');
+   ids.add(original.id);
+   const history=byEvent.get(original.receipt)??[];
+   history.push(original);
+   byEvent.set(original.receipt,history);
  }
- for(const claim of outcome.claims){
-   // The AGAINST side of one value cites other claimed P&L values for the
-   // SAME economic event. Its knowledge is not available until the LATEST
-   // supporting OR opposing original telling was actually observed.
-   const ids=[...(eventClaims.get(claim.proposition.receipt)??[])];
-   const times=ids.map(id=>state.outcomes[id]?.observedAt);
-   if(!times.length||times.some(t=>!instant(t)))
-     throw new TypeError('native contrary outcome evidence lacks its original arrival clock');
-   const knowledgeAvailableAt=times.reduce((a,b)=>
-     Date.parse(a)>Date.parse(b)?a:b);
-   put(claim.cell,knowledgeAvailableAt);
+ // Build native SignCells from the owning FOUR projector, one historical
+ // cut per distinct observation instant within each original economic event.
+ // Co-timed claims enter the same cut: do not invent an ordering for them.
+ for(const events of byEvent.values()){
+   events.sort((a,b)=>compareTime(a.observedAt,b.observedAt)||
+     a.id.localeCompare(b.id));
+   const known=Object.create(null);
+   for(let i=0;i<events.length;){
+     const at=events[i].observedAt;
+     do{
+       const original=events[i++];
+       known[original.id]=original;
+     }while(i<events.length&&compareTime(events[i].observedAt,at)===0);
+     const projected=projectMarketOutcomeEvidenceSigns({
+       state:{decisions:state.decisions,observations:state.observations,outcomes:known},
+       at,
+     });
+     // Witness-set growth changes the SEAVT value, not the SCA subject.
+     for(const claim of projected.claims)put(claim.cell,at);
+   }
  }
- rows.sort((a,b)=>
-   (Date.parse(a.t)-Date.parse(b.t))||
-   (JSON.stringify(a.e)<JSON.stringify(b.e)?-1:
-    JSON.stringify(a.e)>JSON.stringify(b.e)?1:0)||
-   (JSON.stringify(a.v)<JSON.stringify(b.v)?-1:
-    JSON.stringify(a.v)>JSON.stringify(b.v)?1:0));
+ // At equal observation instants, order by the authoritative SCA name of
+ // the complete EAVT witness. JSON.stringify(key/value) is not a semantic
+ // identity and depends on incidental map-key spelling and insertion order.
+ rows.sort((a,b)=>compareTime(a.t,b.t)||eavtId(a).localeCompare(eavtId(b)));
  return Object.freeze(rows);
 }

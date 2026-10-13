@@ -9,15 +9,17 @@ import {assessExecutableBook} from './executable-book.mjs';
 import { principalVenueKey, assertAccountChainScope, indexPrincipalAccounts, sharedPrincipalVenues, scenarioHeldPnLCents } from './principal-account-border.mjs';
 import { marketSideKey, assertFleetBookCapacity, apportionFleetBookDemand } from './fleet-liquidity-border.mjs';
 import {classifyMarketOutcome,readMarketOutcomeEvidence} from './outcome-evidence-border.mjs';
+import {isAbsoluteSeavtClock,compareAbsoluteSeavtClocks as compareTime} from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 
 const finite = (x, label) => { if (typeof x !== 'number' || !Number.isFinite(x)) throw new TypeError(`${label}: finite number required`); return x; };
 const nonnegative = (x, label) => { finite(x, label); if (x < 0) throw new RangeError(`${label}: negative`); return x; };
-const time = (x) => { if (!Number.isFinite(Date.parse(x))) throw new TypeError('ISO timestamp required'); return Date.parse(x); };
+/** Numeric milliseconds are only for duration arithmetic; event precedence uses exact SEAVT clock comparison. */
+const time = (x) => { if (!isAbsoluteSeavtClock(x)) throw new TypeError('ISO timestamp required'); return Date.parse(x); };
 const name = (x) => { if (typeof x !== 'string' || !x.trim()) throw new TypeError('nonempty identifier required'); return x; };
 const money = (x) => { nonnegative(x, 'cents'); if (!Number.isSafeInteger(x)) throw new TypeError('integer cents required'); return x; };
 const venue = (x) => { if (!['kalshi', 'alpaca', 'evm'].includes(x)) throw new TypeError('venue must be kalshi, alpaca or evm'); return x; };
 const initial = () => ({ observations: {}, accounts: {}, quotes: {}, strategies: {}, forecast: null, decisions: {}, outcomes: {} });
-const newer = (old, next) => !old || time(next.observedAt) > time(old.observedAt) || (time(next.observedAt) === time(old.observedAt) && hashPosition(next) > hashPosition(old));
+const newer = (old, next) => !old || compareTime(next.observedAt,old.observedAt) > 0 || (compareTime(next.observedAt,old.observedAt) === 0 && hashPosition(next) > hashPosition(old));
 const put = (table, id, row) => newer(table[id], row) ? { ...table, [id]: row } : table;
 
 function extend(state, move) {
@@ -26,7 +28,7 @@ function extend(state, move) {
     case 'observe': {
       const row = move.observation;
       name(row.id); name(row.source); time(row.availableAt); time(row.observedAt);
-      if (time(row.availableAt) > time(row.observedAt)) throw new RangeError('observation precedes public availability');
+      if (compareTime(row.availableAt,row.observedAt) > 0) throw new RangeError('observation precedes public availability');
       if (row.value === undefined) throw new TypeError('observation value required');
       if (state.observations[row.id] && hashPosition(state.observations[row.id]) !== hashPosition(row)) throw new RangeError('observation identity reused with different evidence');
       next = { ...state, observations: { ...state.observations, [row.id]: row } }; break;
@@ -87,7 +89,7 @@ function extend(state, move) {
       // content hashes, which would keep the base about half the time).
       const base = state.forecast;
       const forecast = conditionMarketForecast(state, move.observationId, move.model, move.at);
-      if (time(forecast.observedAt) < time(base.observedAt)) throw new RangeError('a conditioned forecast cannot precede the forecast it conditions');
+      if (compareTime(forecast.observedAt,base.observedAt) < 0) throw new RangeError('a conditioned forecast cannot precede the forecast it conditions');
       const adopted = extend({ ...state, forecast: null }, { kind: 'forecast', forecast }).state.forecast;
       return { state: { ...state, forecast: adopted }, events: [{ kind: 'forecast', polarity: 'P' }] };
     }
@@ -133,11 +135,11 @@ export const marketGame = gameRules(initial, extend);
  */
 export function conditionMarketForecast(state, observationId, model, at) {
   const f = state.forecast, o = state.observations[observationId], evidence = state.observations[model?.evidenceId];
-  if (!f || !o || !evidence || time(o.observedAt) > time(at) ||
-      time(evidence.observedAt) > time(at))
+  if (!f || !o || !evidence || compareTime(o.observedAt,at) > 0 ||
+      compareTime(evidence.observedAt,at) > 0)
     throw new RangeError('conditioning requires presently available evidence');
-  if(time(evidence.observedAt)>time(o.observedAt) ||
-     time(evidence.availableAt)>time(o.observedAt))
+  if(compareTime(evidence.observedAt,o.observedAt)>0 ||
+     compareTime(evidence.availableAt,o.observedAt)>0)
     throw new RangeError('a model published after its target signal cannot be treated as prospective likelihood');
   if (f.conditioning && f.conditioning.model !== model.evidenceId) throw new RangeError('multiple signals require one jointly calibrated model');
   if (evidence.value?.kind !== 'scenario-likelihood-model' || hashPosition(evidence.value.model) !== hashPosition(model.specification)) throw new TypeError('conditioning model differs from its observed evidence');
@@ -225,7 +227,7 @@ function brierCalibration(state, f, policy) {
   const calibration = f.calibration;
   if (!calibration || !Number.isSafeInteger(calibration.sampleSize) || calibration.sampleSize < policy.minCalibrationSamples
     || !Number.isFinite(calibration.brier) || !Number.isFinite(calibration.baselineBrier) || calibration.brier < 0 || calibration.brier >= calibration.baselineBrier
-    || !calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
+    || !calibration.record || !f.evidenceIds.includes(calibration.record) || compareTime(calibration.windowEnd,f.observedAt) > 0) throw new RangeError('forecast lacks measured calibration better than its baseline');
   const measured = state.observations[calibration.record]?.value;
   if (measured?.kind !== 'calibration' || measured.sampleSize !== calibration.sampleSize || measured.brier !== calibration.brier || measured.baselineBrier !== calibration.baselineBrier || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
   // Every funded strategy needs measured confidence, regardless of method
@@ -248,7 +250,7 @@ function brierCalibration(state, f, policy) {
  * quote is admitted only if it earns after its costs at that record's 95% upper loss rate (planMarket, per candidate). */
 function lossRateCalibration(state, f) {
   const calibration = f.calibration;
-  if (!calibration.record || !f.evidenceIds.includes(calibration.record) || time(calibration.windowEnd) > time(f.observedAt)) throw new RangeError('forecast lacks measured calibration better than its baseline');
+  if (!calibration.record || !f.evidenceIds.includes(calibration.record) || compareTime(calibration.windowEnd,f.observedAt) > 0) throw new RangeError('forecast lacks measured calibration better than its baseline');
   const measured = state.observations[calibration.record]?.value;
   if (measured?.kind !== 'calibration' || measured.method !== 'binary-loss-rate' || measured.windowEnd !== calibration.windowEnd) throw new TypeError('forecast calibration differs from its scored evidence');
   if (!Number.isFinite(measured.roundTripCostFraction) || measured.roundTripCostFraction < 0) throw new TypeError('scored nonnegative strategy cost budget required');
@@ -280,9 +282,9 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
     throw new TypeError('boolean executable-book requirement required');
   const now = time(at); const f = state.forecast;
   const maxAge = nonnegative(policy.maxObservationAgeMs, 'observation age');
-  const fresh = (row) => row && time(row.observedAt) <= now && now - time(row.observedAt) <= maxAge;
-  const evidenceOK = (ids) => ids.every((id) => { const row = state.observations[id]; return row && time(row.observedAt) <= now && time(row.availableAt) <= now; });
-  if (!fresh(f) || time(f.horizon) <= now || !evidenceOK(f.evidenceIds)) throw new RangeError('forecast unavailable, expired or uses future/missing evidence');
+  const fresh = (row) => row && compareTime(row.observedAt,at) <= 0 && now - time(row.observedAt) <= maxAge;
+  const evidenceOK = (ids) => ids.every((id) => { const row = state.observations[id]; return row && compareTime(row.observedAt,at) <= 0 && compareTime(row.availableAt,at) <= 0; });
+  if (!fresh(f) || compareTime(f.horizon,at) <= 0 || !evidenceOK(f.evidenceIds)) throw new RangeError('forecast unavailable, expired or uses future/missing evidence');
   // Two forms of measured confidence: the scored-forecast (Brier) form, whose checks are unchanged in
   // brierCalibration, and the counted loss-rate form for binary strategies (lossRateCalibration).
   const lossRateForm = f.calibration?.method === 'binary-loss-rate';
@@ -311,12 +313,12 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
     for (const id of strategy.quoteIds) {
       const q = state.quotes[id];
       const refuse = (reason) => skips.push({ strategy: strategy.id, id, reason });
-      if (time(strategy.observedAt) > now) { refuse('strategy proposed after decision time'); continue; }
+      if (compareTime(strategy.observedAt,at) > 0) { refuse('strategy proposed after decision time'); continue; }
       if (disputedStrategies.has(strategy.id)) { refuse('unresolved contradictory economic outcome evidence'); continue; }
       if (strategy.falsifierFired) { refuse('strategy falsified'); continue; }
       if (!evidenceOK(strategy.evidenceIds)) { refuse('future or missing strategy evidence'); continue; }
       if (!fresh(q) || !accountByVenue.has(q?.venue)) { refuse('quote/account absent or stale'); continue; }
-      if (time(q.horizon) !== time(f.horizon)) { refuse('payoff horizon differs from the common scenarios'); continue; }
+      if (compareTime(q.horizon,f.horizon) !== 0) { refuse('payoff horizon differs from the common scenarios'); continue; }
       if (!payoffScopes.some(scope=>holdingPeriodMs>=scope.minHoldingPeriodMs&&holdingPeriodMs<=scope.maxHoldingPeriodMs&&hashPosition(scope.target)===hashPosition(payoffTarget(q)))) { refuse('candidate differs from the scored payoff scope or holding period'); continue; }
       if (q.transitionCostFraction + q.carryCostFraction > measured.roundTripCostFraction) { refuse('execution costs exceed the scored strategy cost budget'); continue; }
       if (q.stale || q.availableUnits < q.unitStep) { refuse('no known executable liquidity'); continue; }
@@ -354,7 +356,7 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
         if (!Number.isSafeInteger(q.chainId) || q.chainId<=0 || typeof q.blockHash!=='string' || !/^0x[0-9a-fA-F]{64}$/.test(q.blockHash) || typeof q.finalized!=='boolean' || typeof q.protocol!=='string' || !q.protocol.trim()) { refuse('EVM quote lacks pinned chain/protocol and explicit finality identity'); continue; }
         if (typeof q.blockTimestamp!=='string' || !/^\d{1,16}$/.test(q.blockTimestamp)) { refuse('EVM quote lacks its observed block timestamp'); continue; }
         const stateAge=BigInt(now)-BigInt(q.blockTimestamp)*1000n;
-        if (stateAge<0n || stateAge>BigInt(Math.floor(Math.min(maxAge,60000))) || now-time(q.observedAt)>60000) { refuse('EVM quote market state is future or stale'); continue; }
+        if (stateAge<0n || stateAge>BigInt(Math.floor(Math.min(maxAge,60000))) || compareTime(q.observedAt,at)>0 || now-time(q.observedAt)>60000) { refuse('EVM quote market state is future or stale'); continue; }
       }
       if (q.venue === 'evm' && accountByVenue.get('evm').chainId !== q.chainId) { refuse('EVM account and quote chainId differ'); continue; }
       if (q.venue === 'evm' && q.carrier === 'collateral' && (!(q.leverage > 0) || !Number.isFinite(q.leverage) || !q.collateralToken)) { refuse('collateral payoff requires leverage and token identity'); continue; }
@@ -513,7 +515,7 @@ export function planFleet(state, policies, at) {
  * It is never an authority grant or an execution receipt. */
 export function allocationsFor(decision, { venue: v, principal, instrument, side, chainId, protocol, at, maxAgeMs = 60000 }) {
   venue(v); const age = time(at) - time(decision?.at);
-  if (decision?.type !== 'MarketGameDecision' || decision.effect !== 'intent-only' || age < 0 || age > maxAgeMs || time(decision.horizon) <= time(at)) throw new RangeError('market decision is stale or invalid');
+  if (decision?.type !== 'MarketGameDecision' || decision.effect !== 'intent-only' || compareTime(decision.at,at) > 0 || age > maxAgeMs || compareTime(decision.horizon,at) <= 0) throw new RangeError('market decision is stale or invalid');
   const { id, ...body } = decision; if (id !== hashPosition(body)) throw new RangeError('market decision content address differs');
   if (!side || (v === 'evm' && (!chainId || !protocol))) throw new TypeError('allocation side and EVM chain/protocol required');
   if (name(principal) !== decision.principal) throw new TypeError('market decision belongs to another principal');
