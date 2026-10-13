@@ -659,27 +659,42 @@ export function marketGameSeavt(state,asOf){
            sourceAuthenticated:false,orderEffect:false}],
        }),f.observedAt);
  }
- // Financial outcomes already have a true native FOUR representation in
- // the owning sign-evidence module. Do NOT create a second outcome cell.
- const outcome=projectMarketOutcomeEvidenceSigns({state,at:asOf});
- const eventClaims=new Map();
- for(const claim of outcome.claims){
-   const receipt=claim.proposition.receipt;
-   const ids=eventClaims.get(receipt)??new Set();
-   claim.claimIds.forEach(id=>ids.add(id));
-   eventClaims.set(receipt,ids);
+ // The market-game source is a finite, already-admitted observation history.
+ // Emit each original knowledge cut instead of only the final FOUR snapshot.
+ // Otherwise a later negative/positive witness erases the earlier one-sided
+ // state and no SignChain consumer can replay what was knowable at that time.
+ const byEvent=new Map(),ids=new Set();
+ for(const original of Object.values(state.outcomes)){
+   if(!instant(original?.observedAt))
+     throw new TypeError('native outcome evidence lacks its original absolute clock');
+   if(compareTime(original.observedAt,cutoff)>0)continue;
+   if(!named(original.receipt)||!named(original.id)||ids.has(original.id))
+     throw new TypeError('native outcome evidence needs distinct claim and event identities');
+   ids.add(original.id);
+   const history=byEvent.get(original.receipt)??[];
+   history.push(original);
+   byEvent.set(original.receipt,history);
  }
- for(const claim of outcome.claims){
-   // The AGAINST side of one value cites other claimed P&L values for the
-   // SAME economic event. Its knowledge is not available until the LATEST
-   // supporting OR opposing original telling was actually observed.
-   const ids=[...(eventClaims.get(claim.proposition.receipt)??[])];
-   const times=ids.map(id=>state.outcomes[id]?.observedAt);
-   if(!times.length||times.some(t=>!instant(t)))
-     throw new TypeError('native contrary outcome evidence lacks its original arrival clock');
-   const knowledgeAvailableAt=times.reduce((a,b)=>
-     compareTime(a,b)>0?a:b);
-   put(claim.cell,knowledgeAvailableAt);
+ // Build native SignCells from the owning FOUR projector, one historical
+ // cut per distinct observation instant within each original economic event.
+ // Co-timed claims enter the same cut: do not invent an ordering for them.
+ for(const events of byEvent.values()){
+   events.sort((a,b)=>compareTime(a.observedAt,b.observedAt)||
+     a.id.localeCompare(b.id));
+   const known=Object.create(null);
+   for(let i=0;i<events.length;){
+     const at=events[i].observedAt;
+     do{
+       const original=events[i++];
+       known[original.id]=original;
+     }while(i<events.length&&compareTime(events[i].observedAt,at)===0);
+     const projected=projectMarketOutcomeEvidenceSigns({
+       state:{decisions:state.decisions,observations:state.observations,outcomes:known},
+       at,
+     });
+     // Witness-set growth changes the SEAVT value, not the SCA subject.
+     for(const claim of projected.claims)put(claim.cell,at);
+   }
  }
  rows.sort((a,b)=>
    compareTime(a.t,b.t)||
