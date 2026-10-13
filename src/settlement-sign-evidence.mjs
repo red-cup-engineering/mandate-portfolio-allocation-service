@@ -16,6 +16,7 @@ import {deduceSettlementInterval} from './settlement-modal.mjs';
 import {conditionMarketForecastOnSignal} from './market-information-value.mjs';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 import {readMarketOutcomeEvidence,classifyMarketOutcome} from './outcome-evidence-border.mjs';
+import {isAbsoluteSeavtClock,compareAbsoluteSeavtClocks} from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 
 const identity=s=>typeof s==='string'&&s.trim().length>0;
 const available=t=>typeof t==='string'&&Number.isFinite(Date.parse(t));
@@ -251,8 +252,15 @@ export function projectConditionalRobustActionSign({
 export function projectMarketOutcomeEvidenceSigns({state,at}={}) {
   const reading=readMarketOutcomeEvidence(state,at);
   const claimRows=new Map();
+  const visibleIds=new Set(reading.events.flatMap(event=>
+    event.claims.flatMap(claim=>claim.claimIds)));
   for(const original of Object.values(state.outcomes)){
-    if(typeof original?.id!=='string'||!original.id||claimRows.has(original.id))
+    // A future original, including malformed or conflicting future custody,
+    // cannot change what was knowable at this earlier observation cut.
+    if(!visibleIds.has(original?.id))continue;
+    if(!isAbsoluteSeavtClock(original.observedAt)||
+       compareAbsoluteSeavtClocks(original.observedAt,at)>0)continue;
+    if(typeof original.id!=='string'||!original.id||claimRows.has(original.id))
       throw new TypeError('unique original economic-outcome claim ID required');
     claimRows.set(original.id,original);
   }
