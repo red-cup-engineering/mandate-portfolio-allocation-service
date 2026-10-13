@@ -16,6 +16,7 @@ import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/sign
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 import {projectMarketOutcomeEvidenceSigns} from './settlement-sign-evidence.mjs';
 import {seavtOfSignCell} from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
+import {eavtId} from '@red-cup-engineering/eavt-services-section/row';
 import {
   finiteLawExpectation,extremalTotalVariationExpectation,upperTailMeanOfFiniteLaw,
 } from '@red-cup-engineering/metrologic/number/finite-law';
@@ -696,11 +697,9 @@ export function marketGameSeavt(state,asOf){
      for(const claim of projected.claims)put(claim.cell,at);
    }
  }
- rows.sort((a,b)=>
-   compareTime(a.t,b.t)||
-   (JSON.stringify(a.e)<JSON.stringify(b.e)?-1:
-    JSON.stringify(a.e)>JSON.stringify(b.e)?1:0)||
-   (JSON.stringify(a.v)<JSON.stringify(b.v)?-1:
-    JSON.stringify(a.v)>JSON.stringify(b.v)?1:0));
+ // At equal observation instants, order by the authoritative SCA name of
+ // the complete EAVT witness. JSON.stringify(key/value) is not a semantic
+ // identity and depends on incidental map-key spelling and insertion order.
+ rows.sort((a,b)=>compareTime(a.t,b.t)||eavtId(a).localeCompare(eavtId(b)));
  return Object.freeze(rows);
 }
