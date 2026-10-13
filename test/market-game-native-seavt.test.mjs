@@ -213,3 +213,49 @@ test('independent economic events retain their own admission clocks',()=>{
  assert.equal(separate.t,instant(21,45));
  assert.deepEqual(told(signCellOfSeavt(separate)),[true,false]);
 });
+
+test('late independent corroboration never rewrites the provenance or clock of the first telling',()=>{
+ const inputs=state();
+ inputs.outcomes['claim-1'].sourceObservationId=undefined;
+ inputs.outcomes.opposed={
+   ...inputs.outcomes.opposed,id:'confirm',pnlCents:25,
+   sourceObservationId:'original-1',
+ };
+ const early=marketGameSeavt(inputs,instant(21,30));
+ const later=marketGameSeavt(inputs,instant(21,40));
+ const byPnl=rows=>rows.filter(row=>{
+   const c=signCellOfSeavt(row);
+   return c.predicate==='has-claimed-economic-pnl-cents'&&
+     c.object.claimedPnlCents===25;
+ });
+ const first=byPnl(early),both=byPnl(later);
+ assert.equal(first.length,1);
+ assert.equal(both.length,2);
+ assert.equal(first[0].t,instant(21,30));
+ assert.equal(both[1].t,instant(21,40));
+ assert.equal(address(signCellOfSeavt(both[0])),
+   address(signCellOfSeavt(both[1])));
+ const source0=signCellOfSeavt(first[0]).for.find(w=>w.claimId==='claim-1');
+ const source1=signCellOfSeavt(both[1]).for.find(w=>w.claimId==='claim-1');
+ const confirm=signCellOfSeavt(both[1]).for.find(w=>w.claimId==='confirm');
+ assert.deepEqual(source0,source1);
+ assert.equal(source0.sourceLinked,false);
+ assert.deepEqual(source0.sourceObservationIds,[]);
+ assert.equal(confirm.sourceLinked,true);
+ assert.deepEqual(confirm.sourceObservationIds,['original-1']);
+ const log=logOfSeavtRows(later);
+ const rows=log.where({subject:'one-economic-event',predicate:'has-claimed-economic-pnl-cents'});
+ assert.equal(rows.filter(r=>r.object.claimedPnlCents===25).length,2);
+ assert.deepEqual(rows.filter(r=>r.object.claimedPnlCents===25).map(r=>r.observedAt),
+   [instant(21,30),instant(21,40)]);
+});
+
+test('economic claim identity cannot be reused across independent historical events',()=>{
+ const inputs=state();
+ inputs.outcomes.other={
+   ...inputs.outcomes.opposed,receipt:'another-economic-event',
+   id:'claim-1',observedAt:instant(21,45),
+ };
+ assert.throws(()=>marketGameSeavt(inputs,instant(21,55)),
+   /distinct claim and event identities/);
+});
