@@ -18,6 +18,7 @@ const actions=()=>[
 ];
 const signal=(correct=1)=>({
   id:'frozen-source-likelihoods',availableAt:'2026-10-12T19:00:00Z',
+  conditionedOnForecastId:forecast().id,
   sourceEvidenceIds:['calibrated-before-decision'],
   signals:[
     {id:'rising',likelihoodByScenario:{up:correct,down:1-correct}},
@@ -66,6 +67,7 @@ test('rare but possible preissued signal retains nonzero expected dollar value',
  const f=forecast();
  const model={
   id:'rare-receipt-calibrated-beforehand',
+  conditionedOnForecastId:forecast().id,
   availableAt:'2026-10-12T19:00:00Z',
   sourceEvidenceIds:['preissued-rare-event-calibration'],
   signals:[
@@ -164,7 +166,9 @@ test('research purchases compete on one predeclared joint-scenario action menu',
     ],
   });
   assert.equal(menu.selectedResearchId, 'filing-surprise');
-  assert.deepEqual(menu.rankedAlternatives.map(x => x.id), ['filing-surprise','options-interpretation','news-repetition']);
+  assert.deepEqual(menu.rankedAlternatives.map(x => x.id), ['filing-surprise']);
+  assert.deepEqual(menu.mathematicallyDominatedAlternatives.map(x=>x.id),
+    ['news-repetition','options-interpretation']);
   assert.ok(Math.abs(menu.rankedAlternatives[0].netEvsiUsd - .7) < 1e-10);
   assert.equal(menu.noResearchPurchased, true);
   assert.equal(menu.tradeEligible, false);
@@ -183,6 +187,7 @@ test('unknown or future evidence becomes an explicit gap, never an inferred alph
   assert.equal(menu.evidenceGaps.length, 2);
   assert.equal(menu.selectedResearchId, 'calibrated-filing');
   assert.equal(menu.rankedAlternatives.length, 1);
+  assert.equal(menu.mathematicallyDominatedAlternatives.length,0);
 });
 
 test('alternative interpretations of the same news cannot manufacture additive information value', () => {
@@ -195,6 +200,9 @@ test('alternative interpretations of the same news cannot manufacture additive i
   });
   assert.equal(menu.selectedResearchId, 'cheap-model');
   assert.ok(menu.rankedAlternatives.every(x => Math.abs(x.grossEvsiUsd-.6)<1e-10));
+  assert.deepEqual(menu.rankedAlternatives.map(x=>x.id),['cheap-model']);
+  assert.deepEqual(menu.mathematicallyDominatedAlternatives,
+    [{id:'expensive-model',dominatedBy:'cheap-model'}]);
   assert.ok(menu.limitations.some(x => x.includes('NOT additive')));
 });
 
@@ -240,7 +248,8 @@ test('receiving a source-conditioned observation updates every shared scenario a
 
 test('a later likelihood cannot double-count a prior forecast without explicit conditional binding',()=>{
  assert.throws(()=>conditionMarketForecastOnSignal({
-  forecast:forecast(),signalModel:signal(.8),observation:receivedSignal(),at:now,
+  forecast:forecast(),signalModel:{...signal(.8),conditionedOnForecastId:undefined},
+  observation:receivedSignal(),at:now,
  }),/precommitted conditional signal/);
  assert.throws(()=>conditionMarketForecastOnSignal({
   forecast:forecast(),signalModel:conditionalModel(),
@@ -265,4 +274,37 @@ test('an unmodeled received signal has no posterior, not an invented decisive fo
  assert.equal(r.forecast,null);
  assert.equal(r.conditionalAction,null);
  assert.equal(r.orderEffect,false);
+});
+
+
+test('research EVSI must target the exact frozen common forecast before attention is spent',()=>{
+ assert.throws(()=>evaluate({signalModel:{...signal(.8),conditionedOnForecastId:'other-prior'}}),/preissued signal kernel/);
+ assert.throws(()=>evaluate({signalModel:{...signal(.8),conditionedOnForecastId:undefined}}),/preissued signal kernel/);
+ assert.throws(()=>evaluate({forecast:{...forecast(),availableAt:'2026-10-12T21:00:00Z'}}),/point-in-time/);
+ assert.throws(()=>evaluate({forecast:{...forecast(),availableAt:'2026-10-12T17:00:00Z'}}),/point-in-time/);
+ assert.throws(()=>evaluate({signalModel:{...signal(.8),availableAt:'yesterday'}}),/preissued signal kernel/);
+ assert.throws(()=>evaluate({actions:[...actions(),{id:'unbounded',payoffsUsdByScenario:{up:1e300,down:-1e300}}]}),/bounded complete payoff/);
+});
+
+
+test('automatic binary Blackwell pruning can be disabled without changing EVSI mathematics',()=>{
+ const a=compareMarketResearchAcquisitions({
+  forecast:forecast(),actions:actions(),at:now,
+  candidates:[
+   {id:'fine',signalModel:{...signal(.9),id:'finer'},computeCostUsd:.1},
+   {id:'coarse',signalModel:{...signal(.6),id:'coarser'},computeCostUsd:.2},
+  ],
+ });
+ assert.deepEqual(a.rankedAlternatives.map(x=>x.id),['fine']);
+ assert.deepEqual(a.mathematicallyDominatedAlternatives,
+  [{id:'coarse',dominatedBy:'fine'}]);
+ const b=compareMarketResearchAcquisitions({
+  forecast:forecast(),actions:actions(),at:now,autoGarbling:false,
+  candidates:[
+   {id:'fine',signalModel:{...signal(.9),id:'finer'},computeCostUsd:.1},
+   {id:'coarse',signalModel:{...signal(.6),id:'coarser'},computeCostUsd:.2},
+  ],
+ });
+ assert.deepEqual(b.rankedAlternatives.map(x=>x.id),['fine','coarse']);
+ assert.equal(b.mathematicallyDominatedAlternatives.length,0);
 });

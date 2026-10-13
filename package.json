@@ -24,7 +24,8 @@
     "./scenario-sign-history": "./src/scenario-sign-history.mjs",
     "./joint-threshold-pushforward": "./src/joint-threshold-pushforward.mjs",
     "./joint-scenario-ambiguity": "./src/joint-scenario-ambiguity.mjs",
-    "./outcome-evidence-border": "./src/outcome-evidence-border.mjs"
+    "./outcome-evidence-border": "./src/outcome-evidence-border.mjs",
+    "./blackwell-garbling": "./src/blackwell-garbling.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

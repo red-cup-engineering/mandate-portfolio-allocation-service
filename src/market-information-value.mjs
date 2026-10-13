@@ -1,4 +1,5 @@
 import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
+import {assertBlackwellGarbling,inferBinaryBlackwellGarbling} from './blackwell-garbling.mjs';
 /**
  * Expected value of sample information (EVSI), reusing the finite JOINT
  * scenario law already owned by the shared market-game.
@@ -19,11 +20,15 @@ import {conditionJointScenarioWeights} from './joint-scenario-condition.mjs';
  * loss estimate as a cost or treat this as an upper bound, not traded alpha.
  */
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
-const clock=x=>typeof x==='string'&&Number.isFinite(Date.parse(x));
+const clock=x=>typeof x==='string'&&
+ /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(x)&&
+ Number.isFinite(Date.parse(x));
 const identity=x=>typeof x==='string'&&x.trim().length>0;
 const simplex=x=>finite(x)&&x>=0&&x<=1;
 const average=(rows)=>rows.reduce((s,x)=>s+x,0);
 const tol=1e-9;
+const payoffBound=1e12;
+const lexical=(a,b)=>a<b?-1:a>b?1:0;
 
 /**
  * @param {object} forecast the existing market-game forecast:
@@ -43,6 +48,9 @@ export function evaluateMarketInformationValue({
  repricingCostBoundUsd=0,
 }={}){
  if(!forecast||!identity(forecast.id)||!clock(forecast.observedAt)||
+    (forecast.availableAt!==undefined&&!clock(forecast.availableAt))||
+    Date.parse(forecast.observedAt)>Date.parse(forecast.availableAt??forecast.observedAt)||
+    Date.parse(forecast.availableAt??forecast.observedAt)>Date.parse(at)||
     !clock(forecast.horizon)||Date.parse(forecast.horizon)<=Date.parse(at)||
     !Array.isArray(forecast.scenarios)||forecast.scenarios.length<2||
     forecast.scenarios.length>512||!Array.isArray(forecast.evidenceIds)||
@@ -52,6 +60,7 @@ export function evaluateMarketInformationValue({
  if(!Array.isArray(actions)||actions.length<1||actions.length>128||
     !signalModel||!identity(signalModel.id)||!clock(signalModel.availableAt)||
     Date.parse(signalModel.availableAt)>Date.parse(at)||
+    signalModel.conditionedOnForecastId!==forecast.id||
     !Array.isArray(signalModel.sourceEvidenceIds)||!signalModel.sourceEvidenceIds.length||
     !Array.isArray(signalModel.signals)||signalModel.signals.length<2||
     signalModel.signals.length>128||
@@ -70,7 +79,9 @@ export function evaluateMarketInformationValue({
  for(const a of actions){
   if(!identity(a?.id)||actionsSeen.has(a.id)||!a.payoffsUsdByScenario||
      Object.keys(a.payoffsUsdByScenario).length!==scenarioRows.length||
-     !scenarioRows.every(s=>finite(a.payoffsUsdByScenario[s.id])))
+     !scenarioRows.every(s=>Object.hasOwn(a.payoffsUsdByScenario,s.id)&&
+       finite(a.payoffsUsdByScenario[s.id])&&
+       Math.abs(a.payoffsUsdByScenario[s.id])<=payoffBound))
    throw new TypeError('each distinct action needs a bounded complete payoff vector');
   actionsSeen.add(a.id);readyActions.push(a);
  }
@@ -84,7 +95,8 @@ export function evaluateMarketInformationValue({
  for(const z of signalModel.signals){
   if(!identity(z?.id)||sigSeen.has(z.id)||!z.likelihoodByScenario||
      Object.keys(z.likelihoodByScenario).length!==scenarioRows.length||
-     !scenarioRows.every(s=>simplex(z.likelihoodByScenario[s.id])))
+     !scenarioRows.every(s=>Object.hasOwn(z.likelihoodByScenario,s.id)&&
+       simplex(z.likelihoodByScenario[s.id])))
    throw new TypeError('each signal needs a bounded complete conditional probability row');
   sigSeen.add(z.id);probRows.push(z);
  }
@@ -96,7 +108,7 @@ export function evaluateMarketInformationValue({
  const priorPayoffs=readyActions.map(a=>({
   id:a.id,expectedUsd:average(scenarioRows.map(s=>s.probability*a.payoffsUsdByScenario[s.id])),
  }));
- const priorBest=[...priorPayoffs].sort((a,b)=>b.expectedUsd-a.expectedUsd||a.id.localeCompare(b.id))[0];
+ const priorBest=[...priorPayoffs].sort((a,b)=>b.expectedUsd-a.expectedUsd||lexical(a.id,b.id))[0];
  const signals=probRows.map(z=>{
   const mass=average(scenarioRows.map(s=>s.probability*z.likelihoodByScenario[s.id]));
   const candidates=readyActions.map(a=>({
@@ -104,7 +116,7 @@ export function evaluateMarketInformationValue({
      s=>s.probability*z.likelihoodByScenario[s.id]*a.payoffsUsdByScenario[s.id])),
   }));
   const best=[...candidates].sort((a,b)=>
-    b.probabilityWeightedPayoffUsd-a.probabilityWeightedPayoffUsd||a.id.localeCompare(b.id))[0];
+    b.probabilityWeightedPayoffUsd-a.probabilityWeightedPayoffUsd||lexical(a.id,b.id))[0];
   // A nonzero rare observation can have material dollar EVSI; the simplex
   // normalization tolerance is NOT permission to erase that signal.
   return {signal:z.id,probability:mass,
@@ -151,15 +163,76 @@ export function evaluateMarketInformationValue({
  * than a zero-valued signal. No inference job or brokerage operation runs.
  */
 export function compareMarketResearchAcquisitions({
-  forecast, actions, at, candidates = [],
+  forecast, actions, at, candidates = [], garblings = [], autoGarbling = true,
 } = {}) {
   if (!Array.isArray(candidates) || candidates.length < 1 || candidates.length > 64)
     throw new TypeError('bounded-research-acquisition-candidates-required');
-  const names = new Set(), scored = [], gaps = [];
+  if (!Array.isArray(garblings) || garblings.length > 128 ||
+      typeof autoGarbling !== 'boolean')
+    throw new TypeError('bounded-Blackwell-garbling-comparisons-required');
+  const names = new Set(), byId = new Map(), scored = [], gaps = [];
   for (const candidate of candidates) {
     if (!identity(candidate?.id) || names.has(candidate.id))
       throw new TypeError('unique-research-acquisition-identity-required');
     names.add(candidate.id);
+    byId.set(candidate.id,candidate);
+  }
+  const costOf = candidate => {
+    const compute = candidate.computeCostUsd ?? 0;
+    const repricing = candidate.repricingCostBoundUsd ?? 0;
+    if (!finite(compute) || compute < 0 || !finite(repricing) ||
+        repricing < 0 || !finite(compute+repricing))
+      throw new TypeError('finite nonnegative research and repricing cost required');
+    return compute+repricing;
+  };
+  // The mathematical witness is verified over the WHOLE scenario family.
+  // Higher information at a HIGHER cost cannot eliminate the cheaper option.
+  // Equal-cost equivalent experiments break ties by code-point identity,
+  // ruling out mutual-elimination cycles.
+  const excluded = new Map();
+  const prefer = (finer,coarser) => {
+    const finerCost = costOf(finer),coarserCost = costOf(coarser);
+    if (finerCost < coarserCost ||
+        (finerCost === coarserCost && lexical(finer.id,coarser.id)<0)) {
+      const previous = excluded.get(coarser.id);
+      if (!previous || finerCost < previous.cost ||
+          (finerCost === previous.cost && lexical(finer.id,previous.id)<0))
+        excluded.set(coarser.id,{id:finer.id,cost:finerCost});
+    }
+  };
+  for (const claim of garblings) {
+    const finer = byId.get(claim?.finerId), coarser = byId.get(claim?.coarserId);
+    if (!finer || !coarser || claim.finerId === claim.coarserId)
+      throw new TypeError('garbling must relate two different offered research candidates');
+    assertBlackwellGarbling({
+      forecast, at, finerModel:finer.signalModel,
+      coarserModel:coarser.signalModel, garbling:claim.kernel,
+    });
+    prefer(finer,coarser);
+  }
+  // Binary experiments are small enough that the house can derive its own
+  // stochastic factorization, rather than wait for an agent to volunteer a
+  // certificate. This is a conservative discovery method: non-binary or
+  // ill-conditioned candidates remain scored instead of being guessed away.
+  if (autoGarbling) {
+    const alternatives=[...byId.values()];
+    for(let i=0;i<alternatives.length;i++)
+      for(let j=0;j<alternatives.length;j++) {
+        if(i===j)continue;
+        const finer=alternatives[i],coarser=alternatives[j];
+        let cheaper;
+        try {cheaper=costOf(finer)<=costOf(coarser);}
+        catch{continue;}
+        if(!cheaper)continue;
+        const kernel=inferBinaryBlackwellGarbling({
+          forecast,at,finerModel:finer.signalModel,
+          coarserModel:coarser.signalModel,
+        });
+        if(kernel)prefer(finer,coarser);
+      }
+  }
+  for (const candidate of candidates) {
+    if (excluded.has(candidate.id)) continue;
     try {
       const assessment = evaluateMarketInformationValue({
         forecast, actions, at, signalModel: candidate.signalModel,
@@ -186,7 +259,7 @@ export function compareMarketResearchAcquisitions({
       });
     }
   }
-  scored.sort((a, b) => b.netEvsiUsd - a.netEvsiUsd || a.id.localeCompare(b.id));
+  scored.sort((a, b) => b.netEvsiUsd - a.netEvsiUsd || lexical(a.id,b.id));
   const selected = scored.find(row => row.shouldAcquireConditional) ?? null;
   return Object.freeze({
     kind: 'joint-market-alternative-research-acquisition-menu-v1',
@@ -194,11 +267,17 @@ export function compareMarketResearchAcquisitions({
     selectedResearchId: selected?.id ?? null,
     selectedConditionalNetEvsiUsd: selected?.netEvsiUsd ?? null,
     rankedAlternatives: Object.freeze(scored.map(row => Object.freeze(row))),
+    // These were pruned by verified stochastic-kernel factoring, not by
+    // sentiment, source status, or an agent's unsupported ranking assertion.
+    mathematicallyDominatedAlternatives: Object.freeze([...excluded]
+      .sort(([a],[b])=>lexical(a,b))
+      .map(([id,w])=>Object.freeze({id,dominatedBy:w.id}))),
     evidenceGaps: Object.freeze(gaps.map(row => Object.freeze(row))),
     noResearchPurchased: true, tradeEligible: false, orderEffect: false,
     limitations: Object.freeze([
       'each signal likelihood and action payoff remains an evidence-dependent, unverified model unless independently validated',
       'alternative EVSI values are NOT additive; combined or sequential signals require a jointly calibrated kernel',
+       'binary Blackwell comparisons are discovered and verified before valuing redundant research; no signal was purchased or observed',
       'signal search, inference payment, opponent repricing, venue order and realized alpha are not performed',
     ]),
   });
@@ -303,7 +382,7 @@ export function conditionMarketForecastOnSignal({
       id: action.id,
       expectedUsd: posterior.scenarios.reduce((sum, s) =>
         sum + s.probability * action.payoffsUsdByScenario[s.id], 0),
-    })).sort((a, b) => b.expectedUsd - a.expectedUsd || a.id.localeCompare(b.id));
+    })).sort((a, b) => b.expectedUsd - a.expectedUsd || lexical(a.id,b.id));
   return {
     kind: 'joint-market-scenario-signal-conditioning-v1',
     status: 'conditional-research-posterior',

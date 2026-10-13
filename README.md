@@ -129,6 +129,29 @@ The finite Bayes function is source-agnostic, so it is reusable for priced
 research from news, filings, sports, commodity reports, or weather—provided
 those signals have a frozen, independently evaluated likelihood kernel.
 
+### Research attention under Blackwell information order
+
+`evaluateMarketInformationValue` now requires `signalModel.conditionedOnForecastId`
+to name the same available, time-qualified joint forecast whose payoff menu is
+being valued; the model cannot be repurposed to score research against another
+prior. `compareMarketResearchAcquisitions` accepts optional
+`garblings: [{finerId, coarserId, kernel}]`, where each row of `kernel` maps a
+fine signal ID to probabilities of coarse signal IDs. The existing research
+comparator invokes `assertBlackwellGarbling` on **every** offered joint scenario
+and validates that the coarse experiment is precisely the fine experiment
+followed by the declared stochastic mapping.
+
+This is a conditional Blackwell comparison: with the same fixed feasible
+actions, the fine experiment cannot have lower theoretical expected value of
+information. Only if its **total compute plus repricing cost** is also no
+higher does the comparator exclude the coarser offer from subsequent numerical
+EVSI evaluation. An expensive superior signal never eliminates a cheaper
+inferior one. Deterministic ties use code-point ordering. This is a real
+computational reduction in redundant attention, not a claim of learned
+likelihood reliability, source authentication, actual purchase or realized
+financial returns. The source research and media consumers can use the same
+operator without a separate forecast, journal or probability calculus.
+
 `projectObservedScenarioConditioningSign`, exported from
 `./settlement-sign-evidence`, realizes a successfully derived posterior as
 an actual SignCell + SignChain conditional proof of a *model update*.
