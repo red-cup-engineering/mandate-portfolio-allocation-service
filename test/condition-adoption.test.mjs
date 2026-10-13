@@ -38,3 +38,25 @@ test('a conditioning dated before its base is refused', () => {
   const later = { ...s, forecast: { ...s.forecast, conditioning: undefined, observedAt: '2026-10-10T08:00:00.000Z' } };
   assert.throws(() => marketGame.extend(later, { kind: 'condition', observationId: 'mid', model: { evidenceId: 'model', specification: s.observations.model.value.model }, at }), /cannot precede/u);
 });
+
+
+test('shared market-game observes exact nanosecond causality rather than rounded Date milliseconds', () => {
+ const earlier='2026-10-12T14:00:00.000000001Z';
+ const later='2026-10-12T14:00:00.000000002Z';
+ let s=marketGame.initialPosition();
+ const row={id:'evidence',source:'urn:venue',observedAt:earlier,availableAt:later,value:{quote:1}};
+ assert.throws(()=>marketGame.extend(s,{kind:'observe',observation:row}),/observation precedes public availability/);
+ const admitted=marketGame.extend(s,{kind:'observe',observation:{...row,availableAt:earlier}});
+ s=admitted.state;
+ assert.equal(s.observations.evidence.observedAt,earlier);
+ const sample=id=>({id,observedAt:earlier,horizon:'2026-10-13T14:00:00Z',
+  evidenceIds:['evidence'],scenarios:[
+  {id:'up',probability:0.5,values:{},heldPnlCentsByVenue:{}},
+  {id:'down',probability:0.5,values:{},heldPnlCentsByVenue:{}},
+ ]});
+ s=marketGame.extend(s,{kind:'forecast',forecast:sample('first')}).state;
+ s=marketGame.extend(s,{kind:'forecast',forecast:{...sample('second'),observedAt:later}}).state;
+ assert.equal(s.forecast.id,'second','later source must win regardless of content hash');
+ s=marketGame.extend(s,{kind:'forecast',forecast:{...sample('stale'),observedAt:earlier}}).state;
+ assert.equal(s.forecast.id,'second','older source cannot displace later observation');
+});
