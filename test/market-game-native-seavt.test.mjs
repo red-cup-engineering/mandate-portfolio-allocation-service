@@ -126,3 +126,27 @@ test('unpublished observations, invalid clocks, and unbounded games refuse nativ
  };
  assert.throws(()=>marketGameSeavt(huge,instant(21,55)),/10000 original observations/);
 });
+
+
+test('cross-venue FOUR history does not backdate a nanosecond-later contradiction',()=>{
+ const inputs=state();
+ inputs.outcomes.opposed.observedAt='2026-10-12T21:30:00.000000001Z';
+ const t0='2026-10-12T21:30:00Z',t1='2026-10-12T21:30:00.000000001Z';
+ const earlier=marketGameSeavt(inputs,t0);
+ const later=marketGameSeavt(inputs,t1);
+ const earlierCells=cells(earlier).filter(c=>c.predicate==='has-claimed-economic-pnl-cents');
+ const laterCells=cells(later).filter(c=>c.predicate==='has-claimed-economic-pnl-cents');
+ assert.equal(earlierCells.length,1);
+ assert.deepEqual(told(earlierCells[0]),[true,false]);
+ assert.ok(laterCells.some(c=>c.object.claimedPnlCents===25&&told(c).every(Boolean)));
+ const original=earlier.find(r=>signCellOfSeavt(r).predicate==='has-claimed-economic-pnl-cents');
+ const amended=later.find(r=>signCellOfSeavt(r).predicate==='has-claimed-economic-pnl-cents'&&
+   signCellOfSeavt(r).object.claimedPnlCents===25);
+ assert.equal(original.t,t0);
+ assert.equal(amended.t,t1);
+});
+test('cross-venue SEAVT never admits evidence first available a nanosecond after observation',()=>{
+ const inputs=state();
+ inputs.observations['original-1'].availableAt='2026-10-12T21:25:00.000000001Z';
+ assert.throws(()=>marketGameSeavt(inputs,instant(21,55)),/unpublished/);
+});
