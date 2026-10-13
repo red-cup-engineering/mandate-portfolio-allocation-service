@@ -48,6 +48,30 @@ transaction, log index and reorg/removal status. Raw news never creates an edge.
 For a single JSON endpoint the collector uses a declared selector path and
 limits the response to 1 MiB. It timestamps admission after fetch completion.
 
+## One native financial evidence view, not another receipt schema
+
+The shared `marketGameSeavt(state,asOf)` reads the existing Alpaca, Kalshi,
+EVM/GMX observations, capital snapshots, quotes, strategies, shared forecast,
+conditional decisions and contrary economic outcome evidence directly as
+native **SignCells** identified by **SCA** and presented as typed **SEN**
+values in **SEAVT** rows. It imports the owning
+`@red-cup-engineering/semiotic-eavt-services-section` provider.
+The market-game executable exposes this **read-only** view:
+
+```sh
+node apps/market-game.mjs seavt --record play.jsonl --at 2026-10-12T22:00:00Z
+```
+
+This does not add another journal, JSON schema, account carrier, venue
+executor, or report writer. Rows use the **original time of the evidence**,
+rather than the time somebody reran the query. A contrary P&L witness becomes
+part of the existing SignChain FOUR cell only once that opposing observation
+arrives; its SCA triple stays stable as its evidence changes. An admitted
+source *claim* or model proposal is explicitly not issuer authentication,
+realized accounting profit or an order. Actual original exchange bytes stay
+in the venue's immutable source custody; only independently qualified
+financial results may enter strategy scoring.
+
 ## What an agent supplies
 
 The playable moves are `observe`, `account`, `quote`, `strategy`, `forecast`,

@@ -15,6 +15,7 @@ import {
 import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/signgraph/cell-graph';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
 import {projectMarketOutcomeEvidenceSigns} from './settlement-sign-evidence.mjs';
+import {seavtOfSignCell} from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 import {
   finiteLawExpectation,extremalTotalVariationExpectation,upperTailMeanOfFiniteLaw,
 } from '@red-cup-engineering/metrologic/number/finite-law';
@@ -576,4 +577,117 @@ export function composeMarketOutcomeEvidenceHistory({
     oldHeads:existingHeads,heads:historyHeads(next),
     tradeEligible:false,orderEffect:false,
   });
+}
+
+
+/**
+ * ONE canonical view of the shared Alpaca/Kalshi/EVM market game as:
+ *
+ *   SignCell + both witness sides --SCA--> identity
+ *              --SEN--> typed data --SEAVT--> observation time
+ *
+ * Reuses the EXISTING SignCell and SEAVT providers, not a journal, schema,
+ * receipt type, or a second market game. The MarketGame itself still holds
+ * the bounded computational state needed for optimization; this is its
+ * semantic reading for Operations, Science and Public Services.
+ *
+ * Bare venue snapshots/quotes are claims about supplied inputs; planner
+ * decisions and scenarios are CONDITIONAL results. This function never
+ * upgrades them to authenticated fills, profits, or order effects.
+ *
+ * One as-of read cannot see observations received after that instant.
+ * Repeat reads use the ORIGINAL observation time, not the query time; thus
+ * querying an unchanged game tomorrow doesn't create another financial
+ * "observation" for the same economic event.
+ *
+ * The outcome facet uses the existing SignChain FOUR projection, retaining
+ * contrary witnesses rather than building another truth state.
+ */
+export function marketGameSeavt(state,asOf){
+ if(!instant(asOf)||!state||typeof state!=='object'||
+    !state.observations||!state.accounts||!state.quotes||
+    !state.strategies||!state.decisions||!state.outcomes)
+   throw new TypeError('point-in-time shared financial game with native SEAVT coordinates required');
+ const cutoff=Date.parse(asOf);
+ const rows=[];
+ const scope=[
+  ['observations','market-game:observed-source-claim','source-unverified'],
+  ['accounts','market-game:claimed-venue-account','account-unverified'],
+  ['quotes','market-game:claimed-executable-quote','book-unverified'],
+  ['strategies','market-game:proposed-strategy','strategy-conditional'],
+  ['decisions','market-game:conditional-decision','decision-without-execution'],
+ ];
+ // Bound BEFORE allocating thousands of nested SEN terms. A bounded view
+ // is not a claim that a much larger state has complete source coverage.
+ const population=scope.reduce((n,[table])=>n+Object.keys(state[table]).length,0)
+   +Object.keys(state.outcomes).length+(state.forecast?1:0);
+ if(population>10000)
+   throw new RangeError('finite source projection exceeds 10000 original observations');
+ let count=0;
+ const put=(c,at)=>{
+   if(!instant(at))throw new TypeError('each financial SignCell needs an original absolute clock');
+   if(Date.parse(at)>cutoff)return;
+   if(++count>10000)
+     throw new RangeError('finite source projection exceeds 10000 original observations');
+   rows.push(seavtOfSignCell(c,at));
+ };
+ for(const [table,predicate,qualification] of scope){
+   for(const [id,record] of Object.entries(state[table])){
+     if(!named(id)||!record||typeof record!=='object'||Array.isArray(record))
+       throw new TypeError('well-formed existing financial game identity required');
+     const at=table==='decisions'?record.at:record.observedAt;
+     if(!instant(at))throw new TypeError('game record lacks its original observation/decision clock');
+     if(Date.parse(at)>cutoff)continue;
+     if(table==='observations'&&
+        (!instant(record.availableAt)||
+         Date.parse(record.availableAt)>Date.parse(at)))
+       throw new RangeError('unpublished market evidence cannot enter a native SignCell');
+     // These positive witnesses establish that the existing game ADMITTED an
+     // input/proposal; they do not authenticate the issuer or cash account.
+     put(cell('market-game:'+table+':'+id,predicate,record,{
+       for:[{kind:'market-game-admitted-input',qualification,
+         originalId:id,sourceAuthenticated:false,orderEffect:false}],
+     }),at);
+   }
+ }
+ if(state.forecast!==null&&state.forecast!==undefined){
+   const f=state.forecast;
+   if(!named(f.id)||!instant(f.observedAt))
+     throw new TypeError('shared forecast must carry its original clock and identity');
+   if(Date.parse(f.observedAt)<=cutoff)
+     put(cell('market-game:forecast:'+f.id,
+       'market-game:conditional-joint-scenario-law',f,{
+         for:[{kind:'market-game-model-premise',conditional:true,
+           sourceAuthenticated:false,orderEffect:false}],
+       }),f.observedAt);
+ }
+ // Financial outcomes already have a true native FOUR representation in
+ // the owning sign-evidence module. Do NOT create a second outcome cell.
+ const outcome=projectMarketOutcomeEvidenceSigns({state,at:asOf});
+ const eventClaims=new Map();
+ for(const claim of outcome.claims){
+   const receipt=claim.proposition.receipt;
+   const ids=eventClaims.get(receipt)??new Set();
+   claim.claimIds.forEach(id=>ids.add(id));
+   eventClaims.set(receipt,ids);
+ }
+ for(const claim of outcome.claims){
+   // The AGAINST side of one value cites other claimed P&L values for the
+   // SAME economic event. Its knowledge is not available until the LATEST
+   // supporting OR opposing original telling was actually observed.
+   const ids=[...(eventClaims.get(claim.proposition.receipt)??[])];
+   const times=ids.map(id=>state.outcomes[id]?.observedAt);
+   if(!times.length||times.some(t=>!instant(t)))
+     throw new TypeError('native contrary outcome evidence lacks its original arrival clock');
+   const knowledgeAvailableAt=times.reduce((a,b)=>
+     Date.parse(a)>Date.parse(b)?a:b);
+   put(claim.cell,knowledgeAvailableAt);
+ }
+ rows.sort((a,b)=>
+   (Date.parse(a.t)-Date.parse(b.t))||
+   (JSON.stringify(a.e)<JSON.stringify(b.e)?-1:
+    JSON.stringify(a.e)>JSON.stringify(b.e)?1:0)||
+   (JSON.stringify(a.v)<JSON.stringify(b.v)?-1:
+    JSON.stringify(a.v)>JSON.stringify(b.v)?1:0));
+ return Object.freeze(rows);
 }

@@ -4,6 +4,7 @@ import { statSync, appendFileSync, readFileSync, writeFileSync, openSync, closeS
 import { marketGame, planMarket } from '../src/market-game.mjs';
 import {readMarketOutcomeEvidence} from '../src/outcome-evidence-border.mjs';
 import {projectMarketOutcomeEvidenceSigns} from '../src/settlement-sign-evidence.mjs';
+import {marketGameSeavt} from '../src/scenario-sign-history.mjs';
 import { readPublicObservation, readNewsObservations, alpacaNewsObservation, newswireObservation, evmLogObservation, kalshiMacroObservation } from '../src/public-observations.mjs';
 import { hashPosition } from '@red-cup-engineering/gaming/running/rules';
 import { readMarketPlay as fold } from '../src/play.mjs';
@@ -57,6 +58,11 @@ async function main() {
     if (opt('output')) { writeFileSync(opt('output'), JSON.stringify(research, null, 2) + '\n', { flag: 'wx' }); return { packetId: research.id, facts: research.facts.length, sources: research.observations.length, output: opt('output') }; }
     return research;
   }
+  if(command==='seavt'){
+    // Native SignCell/SCA/SEN/SEAVT presentation of the SAME replayed
+    // Kalshi/Alpaca/GMX game, no sidecar, extra log, or new trade.
+    return marketGameSeavt(state,opt('at')??new Date().toISOString());
+  }
   if (command === 'evidence') {
     // An ephemeral read of existing market moves, not another journal or
     // a new financial fact. Nothing is appended and no trade is eligible.
@@ -96,7 +102,7 @@ async function main() {
     if (args.includes('--append')) appendEntry(opt('record'), { seq: seq + 1, intent: { kind: 'decide', expectedPosition: hashPosition(state), policy, at }, ts: Date.parse(at) });
     return decision;
   }
-  throw new Error('usage: market-game replay|evidence|plan|collect|news|research|ingest --record play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
+  throw new Error('usage: market-game replay|seavt|evidence|plan|collect|news|research|ingest --record play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
 }
 let lock;
 try {
