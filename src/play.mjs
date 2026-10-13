@@ -40,15 +40,19 @@ export function marketMoveObservedAt(intent){
 
 /** Admit one already-defined move and bind it to its actual predecessor.
  * The producer makes no assertion that publisher bytes are authenticated. */
-export function seavtOfMarketMove(state,seq,intent){
+export function seavtOfMarketMove(state,seq,intent,receivedAt){
   if(!Number.isSafeInteger(seq)||seq<0)
     throw new TypeError('market move sequence must be a nonnegative safe integer');
   marketGame.extend(state,intent); // Validate before serializing or writing.
-  const observedAt=marketMoveObservedAt(intent);
+  const sourceObservedAt=marketMoveObservedAt(intent);
+  if(!isAbsoluteSeavtClock(receivedAt)||
+     compareAbsoluteSeavtClocks(sourceObservedAt,receivedAt)>0)
+    throw new TypeError('market move requires an absolute receiving clock not before its source');
   return seavtOfSignCell(cell(hashPosition(state),predicate,{seq,intent},{
-    for:[{kind:'market-game-original-move',sourceAuthenticated:false,
-      independentlyReconciled:false,orderEffect:false}],
-  }),observedAt);
+    for:[{kind:'market-game-original-move',sourceObservedAt,receivedAt,
+      sourceAuthenticated:false,independentlyReconciled:false,
+      orderEffect:false}],
+  }),receivedAt);
 }
 
 const boundedFile=path=>{
@@ -74,8 +78,12 @@ const serialized=row=>{
 };
 
 /** Append a native SignCell/SEAVT event; caller holds the play's lock. */
-export function appendMarketMove(path,state,seq,intent){
-  const row=seavtOfMarketMove(state,seq,intent);
+export function appendMarketMove(path,state,seq,intent,receivedAt,precedingReceivedAt=null){
+  if(seq>0&&(precedingReceivedAt===null||
+       !isAbsoluteSeavtClock(precedingReceivedAt)||
+       compareAbsoluteSeavtClocks(receivedAt,precedingReceivedAt)<0))
+    throw new RangeError('market play receiving clocks must be monotone');
+  const row=seavtOfMarketMove(state,seq,intent,receivedAt);
   const text=serialized(row);
   if(boundedFile(path).size+Buffer.byteLength(text)>PLAY_BYTES_MAX)
     throw new RangeError('bounded native SEAVT play exceeds 128 MiB');
@@ -105,7 +113,7 @@ async function* linesOf(path,maxBytes){
  * visually similar JSON record. Verify SCA address, measured evidence,
  * contiguous sequence, exact original clock and predecessor identity. */
 export async function readMarketPlay(path){
-  let state=marketGame.initialPosition(),seq=-1,rows=0;
+  let state=marketGame.initialPosition(),seq=-1,rows=0,lastReceivedAt=null;
   for await(const line of linesOf(path,PLAY_BYTES_MAX)){
     const row=JSON.parse(line);
     const sign=signCellOfSeavt(row);
@@ -116,16 +124,17 @@ export async function readMarketPlay(path){
       sign.for[0]?.kind!=='market-game-original-move'||
       sign.for[0]?.sourceAuthenticated!==false||
       sign.for[0]?.orderEffect!==false||!move||
-      compareAbsoluteSeavtClocks(row.t,marketMoveObservedAt(move))!==0||
+      (lastReceivedAt!==null&&
+       compareAbsoluteSeavtClocks(row.t,lastReceivedAt)<0)||
       // Re-admit the exact write as well as the source SCA address. Merely
       // recomputing the address of attacker-supplied evidence is insufficient:
       // a forged, self-addressed new witness must not become a play event.
-      !coincides(row,seavtOfMarketMove(state,expected,move)))
+      !coincides(row,seavtOfMarketMove(state,expected,move,row.t)))
       throw new TypeError('market play row violates its native SignCell causal chain');
     state=marketGame.extend(state,move).state;
-    seq=expected;rows++;
+    seq=expected;rows++;lastReceivedAt=row.t;
   }
-  return {state,seq,rows};
+  return {state,seq,rows,lastReceivedAt};
 }
 
 /**
@@ -139,7 +148,7 @@ export async function migrateLegacyMarketPlay(path){
   const {existsSync}=await import('node:fs');
   if(existsSync(backup)||existsSync(temp))
     throw new Error('market play already migrated or an earlier migration requires recovery');
-  let state=marketGame.initialPosition(),seq=-1,rows=0,fd;
+  let state=marketGame.initialPosition(),seq=-1,rows=0,fd,previousReceivedAt=null;
   try{
     fd=openSync(temp,'wx',0o600);
     let written=0;
@@ -148,13 +157,22 @@ export async function migrateLegacyMarketPlay(path){
       const checked=validatePlayRecord([entry]);
       if(!checked.valid||entry.seq!==seq+1)
         throw new TypeError('invalid or noncontiguous original market play');
-      const row=seavtOfMarketMove(state,entry.seq,entry.intent);
+      // The old timestamp was a declared record clock, not an independently
+      // authenticated publisher/receipt time. Never invent precision or
+      // reorder it to disguise a late-arriving earlier source.
+      if(!Number.isSafeInteger(entry.ts))
+        throw new TypeError('historical market record lacks an integral original clock');
+      const receivedAt=new Date(entry.ts).toISOString();
+      if(previousReceivedAt!==null&&
+         compareAbsoluteSeavtClocks(receivedAt,previousReceivedAt)<0)
+        throw new RangeError('historical market records have non-monotone clocks: independent receiving required');
+      const row=seavtOfMarketMove(state,entry.seq,entry.intent,receivedAt);
       const serializedRow=serialized(row),size=Buffer.byteLength(serializedRow);
       if(written+size>PLAY_BYTES_MAX)
         throw new RangeError('migration exceeds bounded native SEAVT play capacity');
       writeFull(fd,serializedRow);written+=size;
       state=marketGame.extend(state,entry.intent).state;
-      seq=entry.seq;rows++;
+      seq=entry.seq;rows++;previousReceivedAt=receivedAt;
     }
     fsyncSync(fd);closeSync(fd);fd=undefined;
     const received=await readMarketPlay(temp);
