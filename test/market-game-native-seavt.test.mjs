@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {address,told} from '@red-cup-engineering/signcell/cell';
+import {eavtId} from '@red-cup-engineering/eavt-services-section/row';
 import {
  seavtOfSignCell,signCellOfSeavt,compareAbsoluteSeavtClocks,
 } from '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
@@ -258,4 +259,18 @@ test('economic claim identity cannot be reused across independent historical eve
  };
  assert.throws(()=>marketGameSeavt(inputs,instant(21,55)),
    /distinct claim and event identities/);
+});
+
+test('equal-time financial tellings have canonical EAVT ordering independent of source map order',()=>{
+ const one=state();
+ one.outcomes.opposed.observedAt=instant(21,30);
+ const two=structuredClone(one);
+ two.outcomes=Object.fromEntries(Object.entries(two.outcomes).reverse());
+ const a=marketGameSeavt(one,instant(21,55));
+ const b=marketGameSeavt(two,instant(21,55));
+ assert.deepEqual(a.map(eavtId),b.map(eavtId));
+ const at=instant(21,30);
+ const ids=a.filter(row=>row.t===at).map(eavtId);
+ assert.deepEqual(ids,[...ids].sort(),
+   'concurrent evidence is ordered by the native content address, not JSON spelling');
 });
