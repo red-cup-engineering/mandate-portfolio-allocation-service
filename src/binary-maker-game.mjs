@@ -74,10 +74,15 @@ export function binaryMakerPlacementBounds({
     pnl:Math.min(win.high,f)-c*f});
   const lower=candidateLower.map(pessimistic).reduce((a,b)=>b.pnl<a.pnl?b:a);
   const upper=candidateUpper.map(optimistic).reduce((a,b)=>b.pnl>a.pnl?b:a);
+  // Conditioning needs positive fill mass. At a zero lower bound, retain its
+  // positive-mass closure; at a zero upper bound the conditional is unidentified.
+  const conditionalWinLow=fill.high===0?null:fill.low===0?(win.low===1?1:0):Math.max(0,1-(1-win.low)/fill.low);
+  const conditionalWinHigh=fill.high===0?null:fill.low===0?(win.high===0?0:1):Math.min(1,win.high/fill.low);
   return {
     kind:'binary-maker-frechet-placement-v1',
     side,priceUsd,makerFeeUsdPerFill,probabilityYes:yes,
     probabilityWin:win,probabilityFill:fill,
+    conditionalWinProbabilityGivenFill:{low:conditionalWinLow,high:conditionalWinHigh},
     conditionalPnlUsdPerPlacement:{
       low:lower.pnl+reward.low-carryUsdPerPlacement,
       high:upper.pnl+reward.high-carryUsdPerPlacement,
