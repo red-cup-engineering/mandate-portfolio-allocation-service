@@ -99,7 +99,8 @@ test('FOUR contradiction has stable SCA identity but time cannot precede its opp
  const late=marketGameSeavt(inputs,instant(21,55));
  const predicate='has-claimed-economic-pnl-cents';
  const original=cells(early).find(x=>x.predicate===predicate&&x.object.claimedPnlCents===25);
- const revised=cells(late).find(x=>x.predicate===predicate&&x.object.claimedPnlCents===25);
+ const revised=cells(late).filter(x=>x.predicate===predicate&&
+   x.object.claimedPnlCents===25).at(-1);
  assert.ok(original&&revised);
  assert.deepEqual(told(original),[true,false]);
  assert.deepEqual(told(revised),[true,true]);
