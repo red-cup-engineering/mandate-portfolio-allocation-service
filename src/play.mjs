@@ -7,13 +7,13 @@
  * normal reader refuses legacy rows, preventing perpetual dual formats.
  */
 import {
-  createReadStream,statSync,openSync,closeSync,readFileSync,writeSync,
-  fsyncSync,fstatSync,renameSync,unlinkSync,
+  createReadStream,statSync,openSync,closeSync,writeSync,
+  fsyncSync,renameSync,unlinkSync,
 } from 'node:fs';
 import {createInterface} from 'node:readline';
 import {validatePlayRecord} from '@red-cup-engineering/gaming/running/play-record';
 import {hashPosition} from '@red-cup-engineering/gaming/running/rules';
-import {cell,address,told} from '@red-cup-engineering/signcell/cell';
+import {cell,coincides,measured} from '@red-cup-engineering/signcell/cell';
 import {seavtOfSignCell,signCellOfSeavt,
   isAbsoluteSeavtClock,compareAbsoluteSeavtClocks} from
   '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
@@ -112,11 +112,15 @@ export async function readMarketPlay(path){
     const move=sign.object?.intent,expected=seq+1;
     if(sign.predicate!==predicate||sign.subject!==hashPosition(state)||
       sign.object?.seq!==expected||sign.for?.length!==1||
-      sign.against?.length!==0||told(sign)[0]!==true||
+      sign.against?.length!==0||!measured(sign)||
       sign.for[0]?.kind!=='market-game-original-move'||
       sign.for[0]?.sourceAuthenticated!==false||
-      sign.for[0]?.orderEffect!==false||
-      !move||compareAbsoluteSeavtClocks(row.t,marketMoveObservedAt(move))!==0)
+      sign.for[0]?.orderEffect!==false||!move||
+      compareAbsoluteSeavtClocks(row.t,marketMoveObservedAt(move))!==0||
+      // Re-admit the exact write as well as the source SCA address. Merely
+      // recomputing the address of attacker-supplied evidence is insufficient:
+      // a forged, self-addressed new witness must not become a play event.
+      !coincides(row,seavtOfMarketMove(state,expected,move)))
       throw new TypeError('market play row violates its native SignCell causal chain');
     state=marketGame.extend(state,move).state;
     seq=expected;rows++;
