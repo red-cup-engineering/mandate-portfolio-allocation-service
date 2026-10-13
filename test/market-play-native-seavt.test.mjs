@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,readFileSync,rmSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {marketGame} from '../src/market-game.mjs';
@@ -180,5 +180,34 @@ test('nonmonotone legacy clocks refuse one-time migration without manufacturing 
   writeFileSync(fx.path,original);
   await assert.rejects(migrateLegacyMarketPlay(fx.path),/non-monotone/);
   assert.equal(readFileSync(fx.path,'utf8'),original);
+ }finally{fx.close();}
+});
+
+test('unterminated last line is never an admitted or extendable SEAVT event',async()=>{
+ const fx=fixture();
+ try{
+  const start=marketGame.initialPosition(),intent=obs('one',at);
+  const first=seavtOfMarketMove(start,0,intent,received);
+  const interrupted=JSON.stringify(first); // The final append lacks its LF.
+  writeFileSync(fx.path,interrupted);
+  await assert.rejects(readMarketPlay(fx.path),/unterminated final SEAVT line/);
+  assert.throws(()=>appendMarketMove(fx.path,start,0,intent,received),
+    /unterminated final SEAVT line/);
+  assert.equal(readFileSync(fx.path,'utf8'),interrupted,
+    'an interrupted append cannot be concealed by appending a new line');
+ }finally{fx.close();}
+});
+
+test('market play cannot use a symlink as source, destination or migration target',async()=>{
+ const fx=fixture();
+ try{
+  const real=fx.path+'.original';
+  writeFileSync(real,'');
+  symlinkSync(real,fx.path);
+  const start=marketGame.initialPosition(),intent=obs('one',at);
+  await assert.rejects(readMarketPlay(fx.path),/regular file/);
+  assert.throws(()=>appendMarketMove(fx.path,start,0,intent,received),/regular file/);
+  await assert.rejects(migrateLegacyMarketPlay(fx.path),/regular file/);
+  assert.equal(readFileSync(real,'utf8'),'');
  }finally{fx.close();}
 });
