@@ -17,38 +17,39 @@ async function main() {
   if (command === 'migrate') return migrateLegacyMarketPlay(opt('record'));
   if (command === 'news') {
     const feeds = boundedJson(opt('feeds')); const cursor = opt('cursor') && existsSync(opt('cursor')) ? boundedJson(opt('cursor')) : { version: 2, feeds: {} };
-    const { state, seq: last } = await fold(opt('record')); let seq = last, at = state;
+    const { state, seq: last, lastReceivedAt } = await fold(opt('record')); let seq = last, at = state, clock = lastReceivedAt;
     const result = await readNewsObservations({ feeds, cursor });
-    for (const intent of result.moves) { const next = marketGame.extend(at, intent).state; appendMarketMove(opt('record'), at, ++seq, intent); at = next; }
+    for (const intent of result.moves) { const next = marketGame.extend(at, intent).state; const receivedAt = new Date().toISOString(); const row = appendMarketMove(opt('record'), at, ++seq, intent, receivedAt, clock); clock = row.t; at = next; }
     if (opt('cursor')) writeFileSync(opt('cursor'), JSON.stringify(result.cursor) + '\n');
     return { admitted: seq - last, obstructions: result.obstructions };
   }
   if (command === 'collect') {
     const config = boundedJson(opt('sources')); if (!Array.isArray(config) || config.length > 20) throw new RangeError('at most 20 public sources per pass');
-    const failures = []; const { state, seq: last } = await fold(opt('record')); let seq = last, position = state;
+    const failures = []; const { state, seq: last, lastReceivedAt } = await fold(opt('record')); let seq = last, position = state, clock = lastReceivedAt;
     for (const source of config) {
       try { const intent = await readPublicObservation(source); const next = marketGame.extend(position, intent).state;
-        appendMarketMove(opt('record'), position, seq + 1, intent); seq += 1; position = next; }
+        const receivedAt = new Date().toISOString(); const row = appendMarketMove(opt('record'), position, seq + 1, intent, receivedAt, clock); clock = row.t; seq += 1; position = next; }
       catch (error) { failures.push({ source: source.source, reason: error.message }); }
     }
     return { admitted: seq - last, failures };
   }
   if (command === 'ingest') {
-    const { state, seq: last } = await fold(opt('record')); const at = opt('at') ?? new Date().toISOString();
+    const { state, seq: last, lastReceivedAt } = await fold(opt('record')); const at = opt('at') ?? new Date().toISOString();
     const input = boundedJson(opt('input')); const format = opt('format');
     if (format === 'koios-research') {
       const moves = researchObservationMoves(input, at); let next = state;
       const admitted = [];
       for (const move of moves) { const before = next; next = marketGame.extend(next, move).state; admitted.push({ before, move }); }
-      for (let i = 0; i < admitted.length; i++) appendMarketMove(opt('record'), admitted[i].before, last + i + 1, admitted[i].move);
+      let clock = lastReceivedAt;
+      for (let i = 0; i < admitted.length; i++) { const receivedAt = new Date().toISOString(); const row = appendMarketMove(opt('record'), admitted[i].before, last + i + 1, admitted[i].move, receivedAt, clock); clock = row.t; }
       return { admitted: moves.length };
     }
     const intent = format === 'alpaca-news' ? alpacaNewsObservation(input, at) : format === 'newswire' ? newswireObservation(input, at) : format === 'evm-log' ? evmLogObservation(input, at) : format === 'kalshi-macro' ? kalshiMacroObservation(input, at) : input;
     // Admit and persist the same canonical witnessed SEAVT carrier.
-    appendMarketMove(opt('record'), state, last + 1, intent);
+    appendMarketMove(opt('record'), state, last + 1, intent, new Date().toISOString(), lastReceivedAt);
     return { admitted: intent.kind };
   }
-  const { state, seq, rows } = await fold(opt('record'));
+  const { state, seq, rows, lastReceivedAt } = await fold(opt('record'));
   if (command === 'research') {
     const research = createResearchPublication(state, boundedJson(opt('assignment')), opt('at') ?? new Date().toISOString());
     if (opt('output')) { writeFileSync(opt('output'), JSON.stringify(research, null, 2) + '\n', { flag: 'wx' }); return { packetId: research.id, facts: research.facts.length, sources: research.observations.length, output: opt('output') }; }
@@ -95,7 +96,7 @@ async function main() {
   if (command === 'plan') {
     const policy = boundedJson(opt('policy')); const at = opt('at') ?? new Date().toISOString();
     const decision = planMarket(state, policy, at);
-    if (args.includes('--append')) appendMarketMove(opt('record'), state, seq + 1, { kind: 'decide', expectedPosition: hashPosition(state), policy, at });
+    if (args.includes('--append')) appendMarketMove(opt('record'), state, seq + 1, { kind: 'decide', expectedPosition: hashPosition(state), policy, at }, new Date().toISOString(), lastReceivedAt);
     return decision;
   }
   throw new Error('usage: market-game migrate|replay|seavt|evidence|plan|collect|news|research|ingest --record native-seavt-play.jsonl [--policy policy.json --at ISO --append | --sources sources.json | --feeds feeds.json --cursor cursor.json | --assignment assignment.json --output research.json | --input move.json --format alpaca-news|newswire|evm-log|koios-research]');
