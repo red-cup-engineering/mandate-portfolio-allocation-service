@@ -34,6 +34,55 @@ const moneyBand=(band,label)=>{
 };
 const clamp=(x,lo,hi)=>Math.min(hi,Math.max(lo,x));
 
+/** Gross losing-exposure envelope for posted binary purchases, without a
+ * fill/settlement independence assumption or an invented joint distribution.
+ * For each case, 0 <= L_i <= c_i 1{W_i loses}; the captured reserve c_i bounds
+ * every partial execution and fee, and winning fills incur no net loss. Thus
+ * E[L_i] <= c_i(1-p_i), and worst-tail ES_a(L_i) <= c_i min(1,(1-p_i)/a).
+ * Monotonicity and subadditivity give the sum bound under arbitrary dependence.
+ * Comonotone loss events attain it only when no logical relations restrict
+ * outcomes. This excludes winning profits, rewards and collateral-return credit;
+ * it is not net P&L, a calibrated risk estimate or an order-admission rule.
+ */
+export function binaryPostedLossBounds(cases,{tailFraction}={}){
+  if(!Array.isArray(cases)||cases.length>4000||!isProbability(tailFraction)||tailFraction===0)
+    throw new TypeError('bounded posted cases and worst-tail mass in (0,1] required');
+  const ids=new Set(),marginals=new Map();
+  const contributions=cases.map(c=>{
+    if(!c||typeof c.id!=='string'||!c.id.trim()||ids.has(c.id))
+      throw new TypeError('distinct posted case identities required');
+    ids.add(c.id);
+    const p=c.probabilityWinLower,cost=c.capitalRequiredUsd,n=c.quantity;
+    if(!isProbability(p)||!isMoney(cost)||!isMoney(n)||n===0||n>10000||cost>n)
+      throw new RangeError('binary win lower bound, quantity and losing-exposure reserve required');
+    if(c.instrument!==undefined||c.side!==undefined){
+      if(typeof c.instrument!=='string'||!c.instrument.trim()||!['yes','no'].includes(c.side))
+        throw new TypeError('outcome identity requires instrument and YES/NO side');
+      const sides=marginals.get(c.instrument)??{yes:0,no:0};
+      sides[c.side]=Math.max(sides[c.side],p);
+      if(sides.yes+sides.no>1)
+        throw new RangeError('contradictory opposite-side marginal lower bounds');
+      marginals.set(c.instrument,sides);
+    }
+    const lossProbabilityUpper=1-p;
+    return {id:c.id,...(c.instrument!==undefined?{instrument:c.instrument,side:c.side}:{}),
+      quantity:n,capitalRequiredUsd:cost,probabilityWinLower:p,lossProbabilityUpper,
+      expectedGrossLossUpperUsd:cost*lossProbabilityUpper,
+      grossExpectedShortfallUpperUsd:cost*Math.min(1,lossProbabilityUpper/tailFraction)};
+  });
+  return {kind:'binary-posted-gross-loss-envelope-v1',tailFraction,contributions,
+    maximumGrossLossUsd:contributions.reduce((s,c)=>s+c.capitalRequiredUsd,0),
+    expectedGrossLossUpperUsd:contributions.reduce((s,c)=>s+c.expectedGrossLossUpperUsd,0),
+    grossExpectedShortfallUpperUsd:contributions.reduce((s,c)=>s+c.grossExpectedShortfallUpperUsd,0),
+    method:'subadditive expected shortfall of Bernoulli loss envelopes under arbitrary dependence',
+    sharpness:'sharp only over unrestricted marginal laws; logical outcome relations may lower the bound',
+    assumptions:['valid marginal win lower bounds for each purchased claim',
+      'captured reserves bound every partial losing fill and its fee; winning fills incur no net loss',
+      'binary $1 purchased-side payoff; no inferred fill probability or conditional independence'],
+    marginalProbabilitiesCalibrated:false,actualFillProbability:null,actualNetLossDistribution:null,
+    tradeEligible:false,orderEffect:false};
+}
+
 /**
  * Sharp placement P&L bounds without independence assumptions.
  *
