@@ -31,21 +31,29 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@red-cup-engineering/position-sizing-service": "workspace:*",
-    "@red-cup-engineering/gaming": "workspace:*",
-    "@red-cup-engineering/communicating": "workspace:*",
-    "@red-cup-engineering/signcell": "workspace:*",
-    "@red-cup-engineering/signchain": "workspace:*",
-    "@red-cup-engineering/signgraph": "workspace:*",
-    "@red-cup-engineering/signcraft": "workspace:*",
-    "@red-cup-engineering/metrologic": "workspace:*",
-    "@red-cup-engineering/semiotic-eavt-services-section": "workspace:*",
-    "@red-cup-engineering/eavt-services-section": "workspace:*"
+    "@red-cup-engineering/position-sizing-service": "0.3.2",
+    "@red-cup-engineering/gaming": "0.1.8",
+    "@red-cup-engineering/communicating": "0.1.4",
+    "@red-cup-engineering/signcell": "0.1.0",
+    "@red-cup-engineering/signchain": "0.1.0",
+    "@red-cup-engineering/signgraph": "0.1.0",
+    "@red-cup-engineering/signcraft": "0.1.0",
+    "@red-cup-engineering/metrologic": "0.3.0",
+    "@red-cup-engineering/semiotic-eavt-services-section": "0.1.0",
+    "@red-cup-engineering/eavt-services-section": "0.10.4"
   },
   "bin": {
     "market-game": "./apps/market-game.mjs",
     "prediction-market-study": "./apps/prediction-market-study.mjs",
     "prediction-market-equity-study": "./apps/prediction-market-equity-study.mjs",
     "market-information": "./apps/market-information.mjs"
-  }
+  },
+  "private": false,
+  "files": [
+    "package.json",
+    "README*",
+    "LICENSE*",
+    "apps",
+    "src"
+  ]
 }
