@@ -40,19 +40,22 @@
 import { bayesianBinaryKellyFraction, binaryOutcomeScenarios, jointKellyForCorrelatedOutcomes, kellyFraction, modelRiskScenarios } from '@red-cup-engineering/position-sizing-service';
 
 const integerCents = (value, label) => {
-  if (!Number.isInteger(value) || value < 1) throw new TypeError(`${label}-must-be-positive-integer-cents`);
+  if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${label}-must-be-positive-integer-cents`);
+  return value;
+};
+const nonnegativeCents = (value, label) => {
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${label}-must-be-nonnegative-safe-integer-cents`);
   return value;
 };
 const fractionOf = (value, label) => {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) throw new RangeError(`${label}-invalid`);
-  return number;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) throw new RangeError(`${label}-invalid`);
+  return value;
 };
 // Exposure may arrive as Maps (a venue book folded in memory) or as plain objects (a record read back).
 const lookup = (table, key) => {
   if (!table) return 0;
-  if (table instanceof Map) return table.get(key) ?? 0;
-  return table[key] ?? 0;
+  const amount = table instanceof Map ? table.get(key) : Object.hasOwn(table, key) ? table[key] : undefined;
+  return nonnegativeCents(amount ?? 0, `exposure-${key}`);
 };
 const exposureOf = (exposure, lane) => exposure?.lanes?.[lane] ?? exposure ?? {};
 
@@ -75,19 +78,43 @@ const exposureOf = (exposure, lane) => exposure?.lanes?.[lane] ?? exposure ?? {}
  */
 export function allocateOpportunities({ opportunities, venues, lanes, sizing = {}, limits, exposure = {} } = {}) {
   if (!Array.isArray(opportunities) || !Array.isArray(venues) || !lanes || typeof lanes !== 'object' || !limits) throw new TypeError('opportunities-venues-lanes-and-limits-required');
-  const kellyMultiple = sizing.kellyMultiple ?? 1;
+  const kellyMultiple = fractionOf(sizing.kellyMultiple ?? 1, 'kelly-multiple');
   const perEvent = fractionOf(limits.perEventFraction, 'per-event-fraction');
   const perDate = fractionOf(limits.perDateFraction, 'per-date-fraction');
   const maxOpen = fractionOf(limits.maxOpenFraction, 'max-open-fraction');
 
-  const totalEquity = venues.reduce((sum, venue) => sum + venue.equityCents, 0);
-  const laneCapital = Object.fromEntries(Object.entries(lanes).map(([lane, { fraction }]) => [lane, Math.floor(totalEquity * fractionOf(fraction, `lane-${lane}-fraction`))]));
-  const cashLeft = new Map(venues.map((venue) => [venue.venue, venue.freeCashCents - (venue.minCashCents ?? 0)]));
+  // A venue represents one observed account in this carrier. Duplicating an
+  // account or providing a negative cash floor must not mint available capital.
+  const cashLeft = new Map();
+  let totalEquity = 0;
+  for (const account of venues) {
+    if (!account || typeof account.venue !== 'string' || !account.venue.trim() ||
+        account.venue !== account.venue.trim() || cashLeft.has(account.venue))
+      throw new TypeError('distinct-named-venue-accounts-required');
+    const equity = nonnegativeCents(account.equityCents, `${account.venue}-equity`);
+    const freeCash = nonnegativeCents(account.freeCashCents, `${account.venue}-free-cash`);
+    const minCash = nonnegativeCents(account.minCashCents ?? 0, `${account.venue}-cash-floor`);
+    if (freeCash > equity) throw new RangeError('unborrowed-free-cash-cannot-exceed-equity');
+    totalEquity += equity;
+    if (!Number.isSafeInteger(totalEquity)) throw new RangeError('total-equity-exceeds-safe-integer-cents');
+    cashLeft.set(account.venue, Math.max(0, freeCash - minCash));
+  }
+  if (Array.isArray(lanes)) throw new TypeError('named-lane-fractions-required');
+  let allocatedFraction = 0;
+  const laneCapital = Object.fromEntries(Object.entries(lanes).map(([lane, data]) => {
+    if (!lane.trim()) throw new TypeError('named-lane-required');
+    const fraction = fractionOf(data?.fraction, `lane-${lane}-fraction`);
+    allocatedFraction += fraction;
+    return [lane, Math.floor(totalEquity * fraction)];
+  }));
+  if (allocatedFraction > 1 + 1e-12 ||
+      Object.values(laneCapital).reduce((sum, cents) => sum + cents, 0) > totalEquity)
+    throw new RangeError('lane-capital-cannot-exceed-observed-equity');
   const used = new Map(); // lane -> { byEvent: Map, byDate: Map, total }
   const usedOf = (lane) => {
     if (!used.has(lane)) {
       const book = exposureOf(exposure, lane);
-      used.set(lane, { book, byEvent: new Map(), byDate: new Map(), total: book.total ?? 0 });
+      used.set(lane, { book, byEvent: new Map(), byDate: new Map(), total: nonnegativeCents(book.total ?? 0, `lane-${lane}-open-risk`) });
     }
     return used.get(lane);
   };
@@ -101,14 +128,19 @@ export function allocateOpportunities({ opportunities, venues, lanes, sizing = {
 
   const skips = [];
   const wants = [];
+  const opportunityIds = new Set();
   for (const opportunity of opportunities) {
+    if (typeof opportunity?.id !== 'string' || !opportunity.id.trim() ||
+        opportunityIds.has(opportunity.id)) throw new TypeError('distinct-opportunity-identities-required');
+    opportunityIds.add(opportunity.id);
     const { id, lane, venue } = opportunity;
     if (!(lane in laneCapital)) { skips.push({ id, reason: `unknown lane ${lane}` }); continue; }
     if (!cashLeft.has(venue)) { skips.push({ id, reason: `venue ${venue} not in the account reading` }); continue; }
     const cost = integerCents(opportunity.priceCents, `${id}-price`);
     const gain = integerCents(opportunity.payoffCents, `${id}-payoff`);
     const fraction = Math.max(0, (jointFractions ? jointFractions.get(opportunity) : kellyFraction({ winProbability: opportunity.winProbability, payoffRatio: gain / cost })) * kellyMultiple);
-    const want = Math.floor(fraction * laneCapital[lane]) - (opportunity.heldRiskCents ?? 0);
+    if (!Number.isFinite(fraction)) throw new RangeError('finite-sized-opportunity-required');
+    const want = Math.floor(fraction * laneCapital[lane]) - nonnegativeCents(opportunity.heldRiskCents ?? 0, `${id}-held-risk`);
     if (fraction <= 0) { skips.push({ id, reason: `no Kelly edge at win probability ${opportunity.winProbability}` }); continue; }
     if (want < cost) { skips.push({ id, reason: 'already holds its Kelly stake' }); continue; }
     const edge = opportunity.rankEdge ?? opportunity.winProbability - cost / (cost + gain);
