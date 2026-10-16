@@ -7,7 +7,8 @@ const finite = (value, label) => {
 export function allocateMandatePortfolio({ scores, uncertainty = {}, currentWeights = {}, mandate } = {}) {
   if (!scores || typeof scores !== "object" || Array.isArray(scores) || !mandate || mandate.type !== "PortfolioAllocationMandate") throw new TypeError("scores-and-allocation-mandate-required");
   const maximumWeight = finite(mandate.maximumWeight, "maximum-weight"), grossLimit = finite(mandate.grossLimit, "gross-limit");
-  if (maximumWeight <= 0 || maximumWeight > 1 || grossLimit <= 0 || grossLimit > Number(mandate.leverageLimit ?? 1) || mandate.shorting === true) throw new RangeError("allocation-mandate-invalid");
+  const leverageLimit = finite(mandate.leverageLimit ?? 1, "leverage-limit");
+  if (maximumWeight <= 0 || maximumWeight > 1 || grossLimit <= 0 || leverageLimit <= 0 || grossLimit > leverageLimit || mandate.shorting === true) throw new RangeError("allocation-mandate-invalid");
   const adjusted = Object.fromEntries(Object.entries(scores).map(([entity, score]) => {
     const risk = Math.max(0, finite(uncertainty[entity] ?? 0, `uncertainty-${entity}`));
     return [entity, Math.max(0, finite(score, `score-${entity}`)) / (1 + risk)];
