@@ -64,14 +64,16 @@ const exposureOf = (exposure, lane) => exposure?.lanes?.[lane] ?? exposure ?? {}
  * @param {{id: string, lane: string, venue: string, instrument: {venue: string, id: string, kind: string}, side: string,
  *   priceCents: number, payoffCents: number, winProbability: number, settlesOn: string,
  *   outcomeStructure?: 'exclusive-losses'|'exclusive-wins'|'independent',
- *   correlation: {event: string, date: string}, heldRiskCents?: number, rankEdge?: number}[]} input.opportunities
+ *   correlation: {event: string, date: string}, heldRiskCents?: number, maxNewRiskCents?: number, rankEdge?: number}[]} input.opportunities
  *   priceCents is the unit cost of the position bought (its unit risk); payoffCents its unit gain; winProbability is
  *   already conservative. rankEdge, when given, replaces the default ranking edge (winProbability less the break-even
- *   probability priceCents / (priceCents + payoffCents)).
+ *   probability priceCents / (priceCents + payoffCents)). maxNewRiskCents, when given, is the most new risk the
+ *   opportunity may add (a per-instrument ceiling the caller computes after everything already held on it).
  * @param {{venue: string, equityCents: number, freeCashCents: number, minCashCents?: number}[]} input.venues
  * @param {Record<string, {fraction: number}>} input.lanes
  * @param {{kellyMultiple?: number, method?: 'kelly'|'bayesian-joint', modelRisk?: {modes: {id?: string, weight: number, lambda: number}[], level?: 'date'|'event'}}} input.sizing
- * @param {{perEventFraction: number, perDateFraction: number, maxOpenFraction: number}} input.limits fractions of lane capital.
+ * @param {{perEventFraction: number, perDateFraction: number, maxOpenFraction: number, lanes?: Record<string, {perEventFraction?: number, perDateFraction?: number, maxOpenFraction?: number}>}} input.limits
+ *   fractions of lane capital; `lanes[laneId]` replaces any of them for that lane only.
  * @param {{byEvent?: object|Map, byDate?: object|Map, total?: number, lanes?: Record<string, object>}} [input.exposure]
  *   risk already open (held plus resting), in cents, flat for one lane or under `lanes[laneId]` for several.
  * @returns {{orders: object[], skips: {id: string, reason: string}[], laneCapital: Record<string, number>}}
@@ -79,9 +81,17 @@ const exposureOf = (exposure, lane) => exposure?.lanes?.[lane] ?? exposure ?? {}
 export function allocateOpportunities({ opportunities, venues, lanes, sizing = {}, limits, exposure = {} } = {}) {
   if (!Array.isArray(opportunities) || !Array.isArray(venues) || !lanes || typeof lanes !== 'object' || !limits) throw new TypeError('opportunities-venues-lanes-and-limits-required');
   const kellyMultiple = fractionOf(sizing.kellyMultiple ?? 1, 'kelly-multiple');
-  const perEvent = fractionOf(limits.perEventFraction, 'per-event-fraction');
-  const perDate = fractionOf(limits.perDateFraction, 'per-date-fraction');
-  const maxOpen = fractionOf(limits.maxOpenFraction, 'max-open-fraction');
+  const perEventGlobal = fractionOf(limits.perEventFraction, 'per-event-fraction');
+  const perDateGlobal = fractionOf(limits.perDateFraction, 'per-date-fraction');
+  const maxOpenGlobal = fractionOf(limits.maxOpenFraction, 'max-open-fraction');
+  // A lane's own limit replaces the global one for that lane; the others keep theirs.
+  const laneLimit = (lane, key, global) => {
+    const own = limits.lanes?.[lane]?.[key];
+    return own === undefined ? global : fractionOf(own, `lane-${lane}-${key}`);
+  };
+  const perEvent = (lane) => laneLimit(lane, 'perEventFraction', perEventGlobal);
+  const perDate = (lane) => laneLimit(lane, 'perDateFraction', perDateGlobal);
+  const maxOpen = (lane) => laneLimit(lane, 'maxOpenFraction', maxOpenGlobal);
 
   // A venue represents one observed account in this carrier. Duplicating an
   // account or providing a negative cash floor must not mint available capital.
@@ -100,16 +110,12 @@ export function allocateOpportunities({ opportunities, venues, lanes, sizing = {
     cashLeft.set(account.venue, Math.max(0, freeCash - minCash));
   }
   if (Array.isArray(lanes)) throw new TypeError('named-lane-fractions-required');
-  let allocatedFraction = 0;
+  // Each lane's capital is at most the observed equity. Lanes may share it: a desk whose lanes each size against
+  // the whole account is bounded together by the venue's free cash below, which every order draws down.
   const laneCapital = Object.fromEntries(Object.entries(lanes).map(([lane, data]) => {
     if (!lane.trim()) throw new TypeError('named-lane-required');
-    const fraction = fractionOf(data?.fraction, `lane-${lane}-fraction`);
-    allocatedFraction += fraction;
-    return [lane, Math.floor(totalEquity * fraction)];
+    return [lane, Math.floor(totalEquity * fractionOf(data?.fraction, `lane-${lane}-fraction`))];
   }));
-  if (allocatedFraction > 1 + 1e-12 ||
-      Object.values(laneCapital).reduce((sum, cents) => sum + cents, 0) > totalEquity)
-    throw new RangeError('lane-capital-cannot-exceed-observed-equity');
   const used = new Map(); // lane -> { byEvent: Map, byDate: Map, total }
   const usedOf = (lane) => {
     if (!used.has(lane)) {
@@ -155,7 +161,7 @@ export function allocateOpportunities({ opportunities, venues, lanes, sizing = {
   }
   for (const group of groups.values()) {
     const { lane, correlation } = group[0].opportunity;
-    const budget = Math.floor(perDate * laneCapital[lane]) - dateUsed(lane, correlation.date);
+    const budget = Math.floor(perDate(lane) * laneCapital[lane]) - dateUsed(lane, correlation.date);
     const total = group.reduce((sum, row) => sum + row.want, 0);
     const scale = total > 0 ? Math.max(0, Math.min(1, budget / total)) : 0;
     for (const row of group) row.want = Math.floor(row.want * scale);
@@ -166,10 +172,12 @@ export function allocateOpportunities({ opportunities, venues, lanes, sizing = {
     const { opportunity, cost, gain, fraction, want, edge } = row;
     const { lane, venue, correlation } = opportunity;
     const capital = laneCapital[lane];
+    const ceiling = opportunity.maxNewRiskCents === undefined ? Infinity : nonnegativeCents(opportunity.maxNewRiskCents, `${opportunity.id}-max-new-risk`);
     const room = Math.min(
       want,
-      Math.floor(perEvent * capital) - eventUsed(lane, correlation.event),
-      Math.floor(maxOpen * capital) - usedOf(lane).total,
+      ceiling,
+      Math.floor(perEvent(lane) * capital) - eventUsed(lane, correlation.event),
+      Math.floor(maxOpen(lane) * capital) - usedOf(lane).total,
       cashLeft.get(venue),
     );
     const count = Math.floor(room / cost);
