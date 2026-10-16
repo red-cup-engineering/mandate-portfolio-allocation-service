@@ -389,8 +389,12 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
       seen.add(id); candidates.push({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns, lossRate, quotedCapacity });
     }
   }
+  // Fractional Kelly scales the full-Kelly position, while every limit below binds the ACTUAL position. Solve at full
+  // Kelly with each limit in full-Kelly units (limit / multiple) and scale after: a binding limit is then met exactly,
+  // where scaling a limit-constrained solution would hold every position to a multiple of its own limit.
+  const multiple = nonnegative(policy.kellyMultiple, 'Kelly multiple'); if (multiple > 1) throw new RangeError('market plan requires Kelly multiple <= 1');
   const constraints = [];
-  const add = (coefficients, cap) => constraints.push({ coefficients, cap });
+  const add = (coefficients, cap) => constraints.push({ coefficients, cap: multiple > 0 ? cap / multiple : cap });
   for (const account of accounts) {
     add(candidates.map(({ q }) => Number(q.venue === account.venue && !q.funding)), Math.max(0, account.freeCashCents - (policy.minCashCentsByVenue?.[account.venue] ?? 0)) / equity);
     for (const [instrument, holding] of Object.entries(account.inventory ?? {})) {
@@ -427,13 +431,13 @@ export function planMarket(state, policy, at, { sideCapacityLimits = null } = {}
   }
   const maxLoss = nonnegative(policy.maxScenarioLossFraction, 'scenario loss');
   f.scenarios.forEach((s, k) => add(candidates.map((c) => -c.returns[k]), maxLoss + baseline[k] - 1));
-  const sized = jointKellyForScenarioReturns({ scenarios: f.scenarios.map((s, k) => ({ probability: s.probability, returns: candidates.map((c) => c.returns[k]) })), baselineWealth: baseline, constraints, budget: policy.maxDeployFraction, maxIterations: 3000, tolerance: 1e-8 });
+  const sized = jointKellyForScenarioReturns({ scenarios: f.scenarios.map((s, k) => ({ probability: s.probability, returns: candidates.map((c) => c.returns[k]) })), baselineWealth: baseline, constraints, budget: multiple > 0 ? policy.maxDeployFraction / multiple : policy.maxDeployFraction, maxIterations: 3000, tolerance: 1e-8 });
   if (!sized.converged) throw new RangeError(`joint sizing did not converge (${sized.kktResidual})`);
-  const multiple = nonnegative(policy.kellyMultiple, 'Kelly multiple'); if (multiple > 1) throw new RangeError('market plan requires Kelly multiple <= 1');
   const orders = [];
   candidates.forEach(({ strategy, q, capitalPerUnit, fundingUnitsPerUnit, returns, lossRate }, i) => {
-    const room = Math.floor(sized.fractions[i] * multiple * equity);
-    const units = Math.floor(room / (capitalPerUnit * 100) / q.unitStep + 1e-10) * q.unitStep;
+    // Units come from the funded fraction directly: flooring the money to whole cents first would drop a unit whenever
+    // the optimizer meets a binding limit from just below it (within its 1e-8 tolerance) at an exact lot boundary.
+    const units = Math.floor(sized.fractions[i] * multiple * equity / (capitalPerUnit * 100) / q.unitStep + 1e-6) * q.unitStep;
     if (units < q.unitStep) { skips.push({ strategy: strategy.id, id: q.id, reason: 'no funded edge under joint limits' }); return; }
     // Round the money upward at the boundary; executable quantity is rounded down.
     const capitalCents = Math.ceil(units * capitalPerUnit * 100 - 1e-9);
