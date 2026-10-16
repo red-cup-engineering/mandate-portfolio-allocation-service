@@ -49,10 +49,18 @@ test('a conservative cash floor may withhold all capital without creating an err
     venues: [{ venue: 'kalshi', equityCents: 10000, freeCashCents: 100, minCashCents: 200 }],
   }))), 0);
 });
-test('lane funding never claims more than the observed equity', () => {
-  assert.throws(() => allocateOpportunities(packet({ lanes: { main: { fraction: 1 }, next: { fraction: 1 } } })), /lane-capital-cannot-exceed-observed-equity/);
-  const okay = allocateOpportunities(packet({ lanes: { main: { fraction: 0.5 }, next: { fraction: 0.5 } } }));
-  assert.equal(okay.laneCapital.main + okay.laneCapital.next, 10000);
+test('lanes sharing the account never allocate beyond its free cash together', () => {
+  const shared = allocateOpportunities(packet({
+    opportunities: [opportunity('main-contract'), { ...opportunity('next-contract'), lane: 'next', correlation: { event: 'KX-OTHER', date: '2026-10-21' } }],
+    venues: [{ venue: 'kalshi', equityCents: 10000, freeCashCents: 3000 }],
+    lanes: { main: { fraction: 1 }, next: { fraction: 1 } },
+  }));
+  assert.equal(shared.laneCapital.main, 10000);
+  assert.equal(shared.laneCapital.next, 10000);
+  assert.ok(risk(shared) <= 3000, 'two whole-account lanes together stay within the free cash');
+  for (const fraction of [1.01, -0.1, NaN]) {
+    assert.throws(() => allocateOpportunities(packet({ lanes: { main: { fraction } } })), /lane-main-fraction-invalid/);
+  }
 });
 test('an invalid Kelly multiple or cap cannot silently amplify a target', () => {
   for (const kellyMultiple of [NaN, Infinity, -1, 1.001, '1']) {

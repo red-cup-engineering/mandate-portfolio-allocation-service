@@ -180,3 +180,40 @@ test('joint sizing refuses to invent exclusivity or independence from marginals'
  assert.throws(()=>allocateOpportunities({opportunities:unknown,venues:venue(10000),lanes,sizing:joint,limits}),/explicit-consistent-outcome-structure/);
  assert.throws(()=>allocateOpportunities({opportunities:unknown,venues:venue(10000),lanes,sizing:{...joint,modelRisk},limits}),/explicit-consistent-outcome-structure/);
 });
+
+// A structurally decided bracket: selling YES at 1c holds NO bought at 99c, and it cannot lose.
+const MAKER = 'structural-maker';
+const decided = (id, event, extra = {}) => ({
+  id, lane: MAKER, venue: 'kalshi', instrument: { venue: 'kalshi', id, kind: 'binary-no' }, side: 'no',
+  priceCents: 99, payoffCents: 1, winProbability: 1 - 1e-6, settlesOn: '2026-10-16', correlation: { event, date: '2026-10-16' }, heldRiskCents: 0, ...extra,
+});
+
+test("a lane's own limit replaces the global one for that lane only", () => {
+  const twoLanes = { [LANE]: { fraction: 1 }, [MAKER]: { fraction: 1 } };
+  const base = { perEventFraction: 0.1, perDateFraction: 1, maxOpenFraction: 1 };
+  const opportunities = [decided('KXTEMPNYCH-26OCT16H15-B70', 'KXTEMPNYCH-26OCT16H15'), tail(`${NY}-T1`, NY, '2026-10-04', 3, 0.01, 0.003)];
+  const capped = allocateOpportunities({ opportunities, venues: venue(10000), lanes: twoLanes, sizing, limits: base });
+  const own = allocateOpportunities({ opportunities, venues: venue(10000), lanes: twoLanes, sizing, limits: { ...base, lanes: { [MAKER]: { perEventFraction: 1 } } } });
+  const riskOf = (result, id) => result.orders.find((order) => order.id === id)?.riskCents ?? 0;
+  assert.ok(riskOf(capped, 'KXTEMPNYCH-26OCT16H15-B70') <= 1000, 'the global 10% event cap binds the maker lane without its own limit');
+  assert.ok(riskOf(own, 'KXTEMPNYCH-26OCT16H15-B70') > 1000, "the maker lane's own event limit lifts its cap");
+  assert.ok(riskOf(own, `${NY}-T1`) <= 1000, 'the other lane keeps the global 10% event cap');
+});
+
+test('a per-instrument ceiling bounds the new risk an opportunity adds', () => {
+  const lanesOne = { [MAKER]: { fraction: 1 } };
+  const open = { perEventFraction: 1, perDateFraction: 1, maxOpenFraction: 1 };
+  const result = allocateOpportunities({ opportunities: [decided('B70', 'E', { maxNewRiskCents: 1500 })], venues: venue(10000), lanes: lanesOne, sizing, limits: open });
+  assert.deepEqual(counts(result), [['B70', 15, 99]]);
+  assert.equal(result.orders[0].riskCents, 1485);
+  const full = allocateOpportunities({ opportunities: [decided('B70', 'E', { maxNewRiskCents: 50 })], venues: venue(10000), lanes: lanesOne, sizing, limits: open });
+  assert.deepEqual(full.orders, []);
+  assert.match(full.skips[0].reason, /no room under the limits/u);
+});
+
+test('malformed lane limits and ceilings are refused', () => {
+  const lanesOne = { [MAKER]: { fraction: 1 } };
+  const open = { perEventFraction: 1, perDateFraction: 1, maxOpenFraction: 1 };
+  assert.throws(() => allocateOpportunities({ opportunities: [decided('B70', 'E')], venues: venue(10000), lanes: lanesOne, sizing, limits: { ...open, lanes: { [MAKER]: { perEventFraction: 1.5 } } } }), /lane-structural-maker-perEventFraction-invalid/u);
+  assert.throws(() => allocateOpportunities({ opportunities: [decided('B70', 'E', { maxNewRiskCents: -1 })], venues: venue(10000), lanes: lanesOne, sizing, limits: open }), /B70-max-new-risk/u);
+});

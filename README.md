@@ -362,6 +362,22 @@ publisher custody before committing. A canonical SignCell address names a
 *triple*, while SignCraft revisions retain its **evidence**, so both addresses
 and complete witnessed causal ancestry must be checked.
 
+## Lane limits and instrument ceilings
+
+`allocateOpportunities` sizes each opportunity at its Kelly fraction of its
+lane's capital (`lanes[laneId].fraction` of the observed equity). The per-event,
+per-date and open-risk fractions in `limits` then cap it, and so does the
+venue's free cash. Every order draws down the same cash balance, so lanes may
+each be funded from the whole account. Overlapping lane capital never allocates
+beyond the free cash.
+
+- `limits.lanes[laneId]` replaces any of `perEventFraction`, `perDateFraction`
+  or `maxOpenFraction` for that lane only. The other lanes keep the global
+  limits.
+- An opportunity's `maxNewRiskCents` caps the new risk it may add. The caller
+  computes it after everything already held on that instrument, for example a
+  per-market collateral budget less the position and resting orders.
+
 ## Consume the funded decision
 
 * Kalshi desk: `cycle --market-decision=decision.json` caps new placements
