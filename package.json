@@ -1,6 +1,6 @@
 {
   "name": "@red-cup-engineering/mandate-portfolio-allocation-service",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Converts independently supplied scores and risk measures into mandate-bounded target weights.",
   "exports": {
@@ -35,8 +35,8 @@
     "@red-cup-engineering/signchain": "0.1.0",
     "@red-cup-engineering/signgraph": "0.1.0",
     "@red-cup-engineering/metrologic": "0.4.0",
-    "@red-cup-engineering/semiotic-eavt-services-section": "0.1.0",
-    "@red-cup-engineering/eavt-services-section": "0.11.0",
+    "@red-cup-engineering/semiotic-eavt-services-section": "0.1.1",
+    "@red-cup-engineering/eavt-services-section": "0.11.1",
     "@red-cup-engineering/position-sizing-service": "0.3.3",
     "@red-cup-engineering/signcraft": "0.1.1",
     "@red-cup-engineering/gaming": "0.1.10",

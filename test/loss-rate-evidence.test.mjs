@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { marketGame, planMarket, lossRateUpperBound } from '../src/market-game.mjs';
+import { hashPosition } from '@red-cup-engineering/gaming/running/rules';
 
 const at = '2026-10-10T15:00:00.000Z', horizon = '2026-10-11T15:00:00.000Z', windowEnd = '2026-10-06T00:00:00.000Z';
 const policy = { principal: 'p', maxObservationAgeMs: 60000, minCalibrationSamples: 30, maxDeployFraction: 1, maxInstrumentFraction: 0.5, maxScenarioLossFraction: 1, kellyMultiple: 1 };
@@ -67,11 +68,16 @@ function brierGame() {
   return { s, at, policy: { principal: 'p', maxObservationAgeMs: 60000, minCalibrationSamples: 30, maxDeployFraction: .5, maxInstrumentFraction: .15, maxScenarioLossFraction: .25, kellyMultiple: .5 } };
 }
 
-test('the Brier form decides exactly as origin/main did', () => {
+test('the Brier form funds the fractional Kelly stake, with the limits binding the actual position', () => {
   const g = brierGame();
   const d = planMarket(g.s, g.policy, g.at);
-  assert.equal(d.id, '6513bfbdcb2b30fee69390d2809894290b92fa2d0a86360e5648518c2a1ffefb');
-  assert.deepEqual(d.orders.map((o) => [o.units, o.capitalCents, 'lossRate' in o]), [[299, 7490, false]]);
+  const { id, ...body } = d;
+  assert.equal(id, hashPosition(body), 'the decision is the content address of its body');
+  // YES at 25c (odds 3) with p = 0.4: full Kelly is (0.4 x 3 - 0.6) / 3 = 20% of the $1,000 equity. Half Kelly is 10%,
+  // inside the 15% instrument cap: $100, 398 contracts after costs. (Halving the capped 15% instead would hold the
+  // position to 7.5%, a limit the policy never stated.)
+  assert.deepEqual(d.orders.map((o) => [o.units, o.capitalCents, 'lossRate' in o]), [[398, 9970, false]]);
+  assert.ok(d.orders.every((o) => o.capitalCents <= g.policy.maxInstrumentFraction * d.equityCents));
   assert.throws(() => planMarket(g.s, { ...g.policy, minCalibrationSamples: 200 }, g.at), /^RangeError: forecast lacks measured calibration better than its baseline$/u);
 });
 
@@ -126,7 +132,7 @@ test('the funded market planner acts on usable side-specific bid/ask liquidity, 
   [{bid:.1},/spread/],
   [{instrument:'DIFFERENT'},/another market side/],
   [{sourceObservationId:'absent'},/original observation/],
-  [{ask:.26},/improves on ask/],
+  [{bid:.259,ask:.26},/improves on ask/], // a tight book whose ask is above the modelled 25c entry
   [{askSize:.1},/liquidity/],
   [{observedAt:'2026-10-10T14:59:00Z'},/stale/],
  ]){

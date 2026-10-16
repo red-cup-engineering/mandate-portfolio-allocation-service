@@ -64,8 +64,9 @@ test('shared research cannot combine different principals or consume their alloc
  assert.throws(()=>allocationsFor(decision,{...request,principal:'another-principal'}),/another principal/);
  assert.throws(()=>allocationsFor(decision,request),/identifier required/);
  assert.equal(allocationsFor(decision,{...request,principal:policy.principal}).length,1);
+ // An account with no principal at all is refused for being unnamed, before ownership is even compared.
  delete s.accounts.evm.principal;
- assert.throws(()=>planMarket(s,policy,at),/declared decision principal/);
+ assert.throws(()=>planMarket(s,policy,at),/account requires named principal/);
 });
 
 test('Alpaca intent formation and live execution reject another principal before venue placement',()=>{
