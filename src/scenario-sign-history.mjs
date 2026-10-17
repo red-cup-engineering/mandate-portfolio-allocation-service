@@ -703,3 +703,188 @@ export function marketGameSeavt(state,asOf){
  rows.sort((a,b)=>compareTime(a.t,b.t)||eavtId(a).localeCompare(eavtId(b)));
  return Object.freeze(rows);
 }
+
+
+/**
+ * The existing native SignCell -> SignGraph -> SignCraft market-history maker
+ * applied to one ON-CHAIN POSITION TRANSFER (not an oracle settlement or P&L).
+ *
+ * Inputs originate with Ethereum Engineering's read-only
+ * createIndependentAgentPredictionReceipt. Its positive claims remain claims
+ * until Coesite independently admits the source and commits history. Do not
+ * turn an x402 PAYMENT-RESPONSE into a SignCell receipt of customer value.
+ * Keep original amounts as atomic-unit strings and original log coordinates.
+ */
+const EVM_FILL_ADDR=/^0x[0-9a-fA-F]{40}$/u;
+const EVM_FILL_HASH=/^0x[0-9a-fA-F]{64}$/u;
+const EVM_FILL_DECIMAL=/^(0|[1-9][0-9]*)$/u;
+const EVM_FILL_MAX=(1n<<256n)-1n;
+
+function agentFillAmount(value,label,nonzero=false) {
+  if(typeof value!=='string'||!EVM_FILL_DECIMAL.test(value))
+    throw new TypeError(label+' needs exact canonical token atomic units');
+  const n=BigInt(value);
+  if(n>EVM_FILL_MAX||(nonzero&&n===0n))
+    throw new RangeError(label+' exceeds its admitted uint256 amount');
+  return n;
+}
+function agentFillAddress(value,label) {
+  if(typeof value!=='string'||!EVM_FILL_ADDR.test(value)||
+      value.toLowerCase()==='0x'+'0'.repeat(40))
+    throw new TypeError(label+' needs a nonzero EVM address');
+  return value.toLowerCase();
+}
+function agentFillHash(value,label) {
+  if(typeof value!=='string'||!EVM_FILL_HASH.test(value))
+    throw new TypeError(label+' needs a canonical EVM hash');
+  return value.toLowerCase();
+}
+function originalFillObservation(receipt,at) {
+  if(!instant(at)||!receipt||receipt.finalized!==true||
+     receipt.transactionStatus!==1||
+     ![
+       'authorizationNonceConsumed','buyerDebited','sharesReceived',
+       'feesSettled','backingConserved',
+     ].every(field=>receipt[field]===true))
+    throw new TypeError('one finalized, source-read EVM market-fill observation and absolute reading time required');
+  const source=receipt.sourceEconomicEvent;
+  if(source?.type!=='EvmAgentPredictionAskFilled'||source.event!=='AskFilled'||
+      typeof source.chain!=='string'||!/^eip155:[1-9][0-9]*$/u.test(source.chain)||
+      receipt.network!==source.chain||
+      !Number.isSafeInteger(source.blockNumber)||source.blockNumber<0||
+      !Number.isSafeInteger(source.logIndex)||source.logIndex<0)
+    throw new TypeError('EVM market fill needs its exact original event coordinate');
+  const coordinate=Object.freeze({
+    type:'EvmAgentPredictionAskFilled',chain:source.chain,
+    blockNumber:source.blockNumber,blockHash:agentFillHash(source.blockHash,'blockHash'),
+    transactionHash:agentFillHash(source.transactionHash,'transactionHash'),
+    logIndex:source.logIndex,emitter:agentFillAddress(source.emitter,'emitter'),event:'AskFilled',
+  });
+  const market=agentFillAddress(receipt.market,'market');
+  const buyer=agentFillAddress(receipt.buyer,'buyer');
+  const asset=agentFillAddress(receipt.asset,'asset');
+  const maker=agentFillAddress(receipt.maker,'maker');
+  const provider=agentFillAddress(receipt.provider,'provider');
+  const protocolRecipient=agentFillAddress(receipt.protocolRecipient,'protocolRecipient');
+  if(market!==coordinate.emitter ||
+     coordinate.transactionHash!==agentFillHash(receipt.transactionHash,'transactionHash'))
+    throw new TypeError('source event emitter and transaction must equal the original market fill');
+  const askId=agentFillAmount(receipt.askId,'askId',true);
+  const marketId=agentFillAmount(receipt.marketId,'marketId',true);
+  const lots=agentFillAmount(receipt.lots,'lots',true);
+  const total=agentFillAmount(receipt.amount,'amount',true);
+  const makerAmount=agentFillAmount(receipt.makerAmount,'makerAmount',true);
+  const providerFee=agentFillAmount(receipt.providerFee,'providerFee');
+  const protocolFee=agentFillAmount(receipt.protocolFee,'protocolFee');
+  if(![0,1,2].includes(receipt.outcome)||makerAmount+providerFee+protocolFee!==total)
+    throw new RangeError('EVM fill consideration is inconsistent with its executed atomic order');
+  const paymentNonce=agentFillHash(receipt.paymentNonce,'paymentNonce');
+  const buyNonce=agentFillHash(receipt.buyNonce,'buyNonce');
+  const positions=Object.freeze({
+    market,asset,buyer,askId:askId.toString(),marketId:marketId.toString(),
+    outcome:receipt.outcome,positionId:(marketId*3n+BigInt(receipt.outcome)).toString(),
+    lots:lots.toString(),totalAtomic:total.toString(),paymentNonce,buyNonce,
+  });
+  const consideration=Object.freeze({
+    market,asset,buyer,maker,provider,protocolRecipient,
+    makerAtomic:makerAmount.toString(),providerFeeAtomic:providerFee.toString(),
+    protocolFeeAtomic:protocolFee.toString(),totalAtomic:total.toString(),
+    // Revenue attribution is NOT the same as customer acceptance or realized gain.
+    recognition:'on-chain consideration observed; no realized profit inferred',
+  });
+  return Object.freeze({coordinate,positions,consideration});
+}
+
+/** Convert Ethereum's original fill reading into native SignCells and their
+ * two oriented SignGraph causal links, without creating new FOUR or a graph DB.
+ * The positive witness is explicitly the Ethereum reader's CLAIM about chain
+ * state; Operations determines whether original chain custody is admissible.
+ */
+export function projectAgentPredictionFillSourceSigns({receipt,at}={}) {
+  const {coordinate,positions,consideration}=originalFillObservation(receipt,at);
+  const provenance=Object.freeze({
+    kind:'evm-market-original-source-reading-claim',
+    coordinate,observedAt:at,sourceAuthenticated:false,
+  });
+  const sourceCell=cell(coordinate,'has-reported-evm-market-fill',Object.freeze({
+    positions,consideration,readingAt:at,
+  }),{for:[provenance]});
+  const sourceAddress=address(sourceCell);
+  const positionCell=cell(
+    Object.freeze({chain:coordinate.chain,market:positions.market,buyer:positions.buyer,
+      positionId:positions.positionId}),
+    'has-reported-atomic-market-position-transfer',
+    Object.freeze({sourceAddress,coordinate,lots:positions.lots,
+      outcome:positions.outcome,collateralAsset:positions.asset,
+      totalAtomic:positions.totalAtomic,readingAt:at}),
+    {for:[Object.freeze({kind:'evm-market-position-source-claim',sourceAddress})]},
+  );
+  const feeCell=cell(
+    Object.freeze({chain:coordinate.chain,market:positions.market,
+      transactionHash:coordinate.transactionHash}),
+    'has-reported-atomic-market-consideration',
+    Object.freeze({sourceAddress,coordinate,consideration,readingAt:at}),
+    {for:[Object.freeze({kind:'evm-market-fee-source-claim',sourceAddress})]},
+  );
+  const positionAddress=address(positionCell),feeAddress=address(feeCell);
+  const linkCells=Object.freeze([
+    cell(sourceAddress,'is-causal-premise-of-observed-position',positionAddress,
+      {for:[{kind:'evm-original-source-to-position',sourceAddress,positionAddress}]}),
+    cell(sourceAddress,'is-causal-premise-of-observed-consideration',feeAddress,
+      {for:[{kind:'evm-original-source-to-fees',sourceAddress,feeAddress}]}),
+  ]);
+  return Object.freeze({
+    kind:'agent-prediction-market-fill-native-sign-projection',
+    at,sourceCell,sourceAddress,positionCell,positionAddress,feeCell,feeAddress,
+    linkCells,graph:relationGraphOfCells(linkCells),
+    flow:flowNetworkOfCells(linkCells),
+    observationsSeavt:Object.freeze([
+      seavtOfSignCell(positionCell,at),seavtOfSignCell(feeCell,at),
+    ]),
+    // This is a received-at observation of a position, not its customer receipt.
+    sourceAuthenticated:false,customerAccepted:false,realizedProfitAccepted:false,
+    grantsTradingAuthority:false,
+  });
+}
+
+/** Build *one source revision then its two distinct market-effect claims* in
+ * the source-owned native SignCraft carrier. The qualified Coesite writer
+ * commits through its existing atomic store; this function has no I/O.
+ */
+export function composeAgentPredictionFillHistory({
+  history=createHistory(),receipt,at,source='prediction-market:onchain-fill-source',
+}={}) {
+  validateHistory(history);
+  if(!named(source))throw new TypeError('native market fill history requires a named source');
+  const projection=projectAgentPredictionFillSourceSigns({receipt,at});
+  const src=projection.sourceCell;
+  const facts=[projection.positionCell,projection.feeCell];
+  const links=projection.linkCells;
+  const existingSource=historySection(history,src.subject,src.predicate);
+  if(existingSource.some(found=>!same(found,src)))
+    throw new RangeError('original EVM market fill coordinate already holds conflicting economic source claims');
+  const all=[src,...facts,...links];
+  const present=c=>historySection(history,c.subject,c.predicate).some(v=>same(v,c));
+  const allPresent=all.every(present);
+  if(allPresent)return Object.freeze({
+    kind:'agent-prediction-fill-native-history',status:'already-observed',
+    history,projection,sourceRevisionId:null,positionRevisionId:null,
+    heads:historyHeads(history),
+  });
+  if(existingSource.length>0 ||
+     [...facts,...links].some(present))
+    throw new RangeError('existing market fill graph has incomplete original source ancestry');
+  let next=observeHistory(history,[src],{source:source+':original-chain'});
+  const sourceRevisionId=next.revisions.at(-1).id;
+  next=observeHistory(next,[...links,...facts],{source:source+':positions-and-fees'});
+  const positionRevisionId=next.revisions.at(-1).id;
+  const last=next.revisions.at(-1);
+  if(!last.parents.includes(sourceRevisionId)||!all.every(c=>
+      historySection(next,c.subject,c.predicate).some(v=>same(v,c))))
+    throw new Error('native SignCraft position, fee and source chronology was not retained');
+  return Object.freeze({
+    kind:'agent-prediction-fill-native-history',status:'composed',
+    history:next,projection,sourceRevisionId,positionRevisionId,
+    heads:historyHeads(next),
+  });
+}
