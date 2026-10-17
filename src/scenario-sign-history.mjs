@@ -804,10 +804,10 @@ export function projectAgentPredictionFillSourceSigns({receipt,at}={}) {
   const {coordinate,positions,consideration}=originalFillObservation(receipt,at);
   const provenance=Object.freeze({
     kind:'evm-market-original-source-reading-claim',
-    coordinate,observedAt:at,sourceAuthenticated:false,
+    coordinate,sourceAuthenticated:false,
   });
   const sourceCell=cell(coordinate,'has-reported-evm-market-fill',Object.freeze({
-    positions,consideration,readingAt:at,
+    positions,consideration,
   }),{for:[provenance]});
   const sourceAddress=address(sourceCell);
   const positionCell=cell(
@@ -816,14 +816,14 @@ export function projectAgentPredictionFillSourceSigns({receipt,at}={}) {
     'has-reported-atomic-market-position-transfer',
     Object.freeze({sourceAddress,coordinate,lots:positions.lots,
       outcome:positions.outcome,collateralAsset:positions.asset,
-      totalAtomic:positions.totalAtomic,readingAt:at}),
+      totalAtomic:positions.totalAtomic}),
     {for:[Object.freeze({kind:'evm-market-position-source-claim',sourceAddress})]},
   );
   const feeCell=cell(
     Object.freeze({chain:coordinate.chain,market:positions.market,
       transactionHash:coordinate.transactionHash}),
     'has-reported-atomic-market-consideration',
-    Object.freeze({sourceAddress,coordinate,consideration,readingAt:at}),
+    Object.freeze({sourceAddress,coordinate,consideration}),
     {for:[Object.freeze({kind:'evm-market-fee-source-claim',sourceAddress})]},
   );
   const positionAddress=address(positionCell),feeAddress=address(feeCell);
