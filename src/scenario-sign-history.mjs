@@ -10,7 +10,7 @@
  */
 import {cell, address, coincides} from '@red-cup-engineering/signcell/cell';
 import {
-  createHistory, historyHeads, historySection, observeHistory, validateHistory,
+  createHistory, historyHeads, historySection, observeHistory, materializeHistory, validateHistory,
 } from '@red-cup-engineering/signcraft/history';
 import {relationGraphOfCells,flowNetworkOfCells} from '@red-cup-engineering/signgraph/cell-graph';
 import {evaluateJointScenarioAmbiguity} from './joint-scenario-ambiguity.mjs';
@@ -887,4 +887,117 @@ export function composeAgentPredictionFillHistory({
     history:next,projection,sourceRevisionId,positionRevisionId,
     heads:historyHeads(next),
   });
+}
+
+
+/** Consume Ethereum Engineering's actual independent chain-reader capability
+ * into an existing owner-provided SignCraft store. This does not create another
+ * RPC client, signer, history database, on-chain commitment or published Offer.
+ *
+ * Coesite must choose and install readFinalizedFill (from the original
+ * ethereum-services-section EVM receipt provider) and the existing durable
+ * store. An authenticated provider is a separate operating authority; no
+ * arbitrary callback's positive flags prove the economic world.
+ *
+ * This performs real state mutation only after the named original transaction
+ * is returned by that source. On a write/readback error it must not retry.
+ */
+export async function circulateAgentPredictionFillToHistory({
+  store,readFinalizedFill,transactionHash,expected,at,
+  source='prediction-market:onchain-fill-source',
+}={}) {
+  if(!store||typeof store.load!=='function'||typeof store.commit!=='function'||
+     typeof readFinalizedFill!=='function'||!instant(at)||
+     typeof transactionHash!=='string'||!EVM_FILL_HASH.test(transactionHash)||
+     !expected||typeof expected!=='object')
+    throw new TypeError('native market source, authorized transaction, absolute clock and SignCraft store required');
+  const refused=(status,issues=[])=>Object.freeze({
+    kind:'agent-prediction-fill-native-circulation',status,
+    persisted:false,issues,customerAccepted:false,realizedProfitAccepted:false,
+    grantsTradingAuthority:false,
+  });
+  let observed;
+  try {
+    observed=await readFinalizedFill({transactionHash,expected});
+  }catch(error) {
+    return refused('source-unavailable',[String(error?.message??error).slice(0,300)]);
+  }
+  if(observed===null||observed===undefined)
+    return refused('finality-pending',['original market receipt is not yet finalized']);
+  let stored,composition;
+  try {
+    stored=store.load();
+    if(stored&&typeof stored.then==='function')
+      throw new TypeError('native SignCraft store must expose synchronous load');
+    const history=stored?.history??createHistory();
+    if(agentFillHash(observed.transactionHash,'observed transaction')!==
+       transactionHash.toLowerCase())
+      throw new RangeError('EVM source read is not the requested original transaction');
+    composition=composeAgentPredictionFillHistory({
+      history,receipt:observed,at,source,
+    });
+  }catch(error){
+    return refused('source-refused',[String(error?.message??error).slice(0,300)]);
+  }
+  try {
+    if(composition.status!=='already-observed'){
+      const write=store.commit(composition.history,stored?.control??{});
+      if(write&&typeof write.then==='function')
+        throw new TypeError('asynchronous native SignCraft commit has uncertain completion');
+    }
+    const recovered=store.load();
+    if(!recovered||typeof recovered.then==='function'||
+       !same(historyHeads(recovered.history),composition.heads))
+      throw new Error('native SignCraft writer did not retain original market fill heads');
+    const projection=composition.projection;
+    const all=[projection.sourceCell,projection.positionCell,projection.feeCell,
+      ...projection.linkCells];
+    if(all.some(item=>!historySection(recovered.history,item.subject,item.predicate)
+        .some(c=>same(c,item))))
+      throw new Error('actual native history omitted source, position or fee evidence');
+    const full=materializeHistory(recovered.history);
+    const sourceRevision=full.revisions.find(revision=>
+      revision.cells.some(c=>same(c,projection.sourceCell)));
+    const effectRevision=full.revisions.find(revision=>
+      revision.cells.some(c=>same(c,projection.positionCell))&&
+      revision.cells.some(c=>same(c,projection.feeCell))&&
+      projection.linkCells.every(link=>revision.cells.some(c=>same(c,link))));
+    if(!sourceRevision||!effectRevision||sourceRevision.id===effectRevision.id)
+      throw new Error('source and effect revisions were not preserved as separate causal steps');
+    const parents=new Map(full.revisions.map(x=>[x.id,x.parents]));
+    const visited=new Set(),pending=[...effectRevision.parents];
+    while(pending.length){
+      const id=pending.pop();
+      if(visited.has(id))continue;
+      visited.add(id);
+      const predecessors=parents.get(id);
+      if(!predecessors)throw new Error('native economic history has a missing causal predecessor');
+      pending.push(...predecessors);
+    }
+    if(!visited.has(sourceRevision.id))
+      throw new Error('market position and consideration were not descended from original EVM source');
+    const graph=relationGraphOfCells(projection.linkCells);
+    const flow=flowNetworkOfCells(projection.linkCells);
+    if(!same(graph,projection.graph)||!same(flow,projection.flow)||
+       flow.edges.length!==2||flow.edges.some(edge=>
+         !same(edge.from,projection.sourceAddress)||
+         ![projection.positionAddress,projection.feeAddress].some(a=>same(a,edge.to))))
+      throw new Error('native SignGraph source-to-position-and-fee incidence differs');
+    return Object.freeze({
+      kind:'agent-prediction-fill-native-circulation',
+      status:composition.status==='already-observed'?'already-persisted':'persisted',
+      persisted:true,sourceEvent:observed.sourceEconomicEvent,
+      sourceAddress:projection.sourceAddress,
+      positionAddress:projection.positionAddress,
+      feeAddress:projection.feeAddress,
+      graphEdges:flow.edges.length,historyHeads:historyHeads(recovered.history),
+      // A finance source claim was stored; the customer and separate ledger
+      // still own acceptance, cost basis, taxes and realized financial gain.
+      sourceAuthenticated:false,customerAccepted:false,realizedProfitAccepted:false,
+      grantsTradingAuthority:false,
+    });
+  }catch(error){
+    // It may have committed. A blind repeat can conflict with a changed head.
+    return refused('commit-or-readback-uncertain',[String(error?.message??error).slice(0,300)]);
+  }
 }
