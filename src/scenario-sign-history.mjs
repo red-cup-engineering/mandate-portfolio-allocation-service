@@ -913,7 +913,10 @@ export async function circulateAgentPredictionFillToHistory({
     throw new TypeError('native market source, authorized transaction, absolute clock and SignCraft store required');
   const refused=(status,issues=[])=>Object.freeze({
     kind:'agent-prediction-fill-native-circulation',status,
-    persisted:false,issues,customerAccepted:false,realizedProfitAccepted:false,
+    // A failed commit/readback might follow an irreversible successful write.
+    // Unknown storage disposition is not a definite "no record".
+    persisted:status==='commit-or-readback-uncertain'?null:false,
+    issues,customerAccepted:false,realizedProfitAccepted:false,
     grantsTradingAuthority:false,
   });
   let observed;
