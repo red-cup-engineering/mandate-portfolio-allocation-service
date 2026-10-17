@@ -19,6 +19,8 @@ import {seavtOfSignCell,signCellOfSeavt,
   isAbsoluteSeavtClock,compareAbsoluteSeavtClocks} from
   '@red-cup-engineering/semiotic-eavt-services-section/admit-seavt-row';
 import {marketGame} from './market-game.mjs';
+import {historySection} from '@red-cup-engineering/signcraft/history';
+import {projectAgentPredictionFillSourceSigns} from './scenario-sign-history.mjs';
 
 const PLAY_BYTES_MAX=128*1048576;
 const LINE_BYTES_MAX=4*1048576;
@@ -228,4 +230,69 @@ export async function migrateLegacyMarketPlay(path){
     try{unlinkSync(temp);}catch{}
     throw error;
   }
+}
+
+
+/**
+ * Consume a source-read on-chain fill through the EXISTING native SignCraft
+ * original-event history, then as an observation in the EXISTING market game.
+ * This is a buyer's contingent inventory event, NOT a realized P&L, account
+ * cash snapshot, customer acceptance, or automatically authorized new trade.
+ *
+ * The caller holds the native market-play file lock. The independent EVM
+ * reader and Coesite's SignCraft receiving were already selected upstream.
+ */
+export function marketObservationOfReceivedAgentPredictionFill({store,receipt,at}={}) {
+  if(!store||typeof store.load!=='function'||!isAbsoluteSeavtClock(at))
+    throw new TypeError('source-received SignCraft store and actual game reading time required');
+  const projection=projectAgentPredictionFillSourceSigns({receipt,at});
+  const readback=store.load();
+  if(!readback||typeof readback.then==='function'||!readback.history)
+    throw new TypeError('replayable native SignCraft received-history readback required');
+  const required=[projection.sourceCell,projection.positionCell,projection.feeCell,
+    ...projection.linkCells];
+  if(required.some(sourceCell=>!historySection(readback.history,
+      sourceCell.subject,sourceCell.predicate).some(c=>coincides(c,sourceCell))))
+    throw new RangeError('economic market move lacks its exact prior SignCraft source and position/fee history');
+  const event=projection.sourceCell.subject;
+  const position=projection.positionCell.object;
+  const consideration=projection.feeCell.object.consideration;
+  const observation=Object.freeze({
+    id:projection.sourceAddress,
+    // Exact source EVM contract; it is NOT a principal identifier.
+    source:event.chain+':'+event.emitter,
+    // Conservative clock: the market game first knew the result no earlier
+    // than this admission, regardless of the original inclusion time.
+    observedAt:at,availableAt:at,
+    value:Object.freeze({
+      kind:'evm-market-atomic-contingent-position-observation',
+      originalEvent:event,sourceAddress:projection.sourceAddress,
+      positionId:position.positionId,buyer:projection.positionCell.subject.buyer,
+      market:receipt.market,asset:receipt.asset,
+      lots:position.lots,consideration,
+      sourceAuthenticated:false,customerAccepted:false,realizedProfitAccepted:false,
+      grantsTradingAuthority:false,
+    }),
+  });
+  return Object.freeze({kind:'observe',observation});
+}
+
+/** Same native appendMarketMove producer, not a second play log. Already
+ * admitted source identities never create another economic move on replay.
+ */
+export function appendReceivedAgentPredictionMarketFill({
+  path,state,seq,receipt,store,receivedAt,precedingReceivedAt=null,
+}={}) {
+  const move=marketObservationOfReceivedAgentPredictionFill({store,receipt,at:receivedAt});
+  const existing=state?.observations?.[move.observation.id];
+  if(existing){
+    if(!coincides(existing.value,move.observation.value))
+      throw new RangeError('market game already records a different economy under the same original EVM source');
+    return Object.freeze({
+      status:'already-in-market-game',move,
+      appended:false,row:null,
+    });
+  }
+  const row=appendMarketMove(path,state,seq,move,receivedAt,precedingReceivedAt);
+  return Object.freeze({status:'appended',move,appended:true,row});
 }
