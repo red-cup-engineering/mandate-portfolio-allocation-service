@@ -215,6 +215,7 @@ test('uncertain write/readback is not automatically attempted again',async()=>{
     store,readFinalizedFill:async()=>observed(),...sameRequest(),
   });
   assert.equal(result.status,'commit-or-readback-uncertain');
+  assert.equal(result.persisted,null,'an uncertain commit is neither definitely absent nor definitely received');
   assert.equal(writes,1);
   assert.equal(result.customerAccepted,false);
 });
