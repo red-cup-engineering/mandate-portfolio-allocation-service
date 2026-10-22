@@ -63,7 +63,7 @@ export function assayExternalCapitalIngress(input) {
     return block('source', 'original-record-identity-missing');
   if ([receipt, posting, treasury, transfer, credit, account].some(x => x.currency !== 'USD'))
     return block('currency', 'usd-only-no-unverified-fx');
-  if (priorAllocationIds.includes(receipt.id) || priorAllocationIds.includes(transfer.id))
+  if ([receipt.id, posting.id, treasury.id, transfer.id, credit.id].some(id => priorAllocationIds.includes(id)))
     return block('deduplication', 'already-allocated-source');
 
   if (receipt.state !== 'settled' || receipt.payerRelation !== 'independent-external' ||
@@ -79,7 +79,7 @@ export function assayExternalCapitalIngress(input) {
       !cents(treasury.protectedReserveCents))
     return block('treasury', 'cleared-attributable-reserve-adjusted-cash-missing');
 
-  if (authorization.state !== 'approved' ||
+  if (authorization.state !== 'approved' || authorization.revoked === true ||
       !named(authorization.id) || !named(authorization.approvedBy) ||
       authorization.principal !== principal ||
       !named(authorization.destinationVenue) || !cents(authorization.maxCents) ||
@@ -100,7 +100,7 @@ export function assayExternalCapitalIngress(input) {
       account.accountId !== credit.destinationAccount ||
       !cents(account.equityCents) || !cents(account.freeCashCents) ||
       !cents(account.reservedCents ?? 0) ||
-      account.freeCashCents > account.equityCents)
+      account.freeCashCents + (account.reservedCents ?? 0) > account.equityCents)
     return block('account', 'venue-account-cash-not-established');
   const amountFields = [receipt.netCents, posting.investableCents, treasury.attributableCents,
     treasury.availableCents, authorization.maxCents, transfer.netCents, credit.creditedCents,
@@ -120,9 +120,11 @@ export function assayExternalCapitalIngress(input) {
     return block('conservation', 'credit-transfer-or-authority-exceeds-cleared-cash');
 
   const dates = [
-    ['receipt', receipt.settledAt], ['posting', posting.postedAt],
-    ['treasury', treasury.observedAt], ['transfer', transfer.settledAt],
-    ['credit', credit.postedAt], ['account', account.observedAt],
+    ['receipt', receipt.settledAt], ['receiptObservation', receipt.observedAt],
+    ['posting', posting.postedAt], ['treasury', treasury.observedAt],
+    ['mandateApproved', authorization.approvedAt], ['mandateObserved', authorization.observedAt],
+    ['transfer', transfer.settledAt], ['credit', credit.postedAt],
+    ['account', account.observedAt],
   ];
   let timestamps;
   try { timestamps = Object.fromEntries(dates.map(([label, value]) => [label, parseTime(value, label)])); }
@@ -130,13 +132,18 @@ export function assayExternalCapitalIngress(input) {
   if (Object.values(timestamps).some(x => x > now) ||
       !(timestamps.receipt <= timestamps.posting &&
         timestamps.receipt <= timestamps.treasury &&
+        timestamps.receipt <= timestamps.receiptObservation &&
+        timestamps.mandateApproved <= timestamps.mandateObserved &&
+        timestamps.mandateApproved <= timestamps.transfer &&
         timestamps.treasury <= timestamps.transfer &&
         timestamps.transfer <= timestamps.credit &&
         timestamps.credit <= timestamps.account))
     return block('clock', 'impossible-or-future-receipt-order');
   if (!fresh(timestamps.treasury, now, freshnessMs) ||
-      !fresh(timestamps.account, now, freshnessMs))
-    return block('freshness', 'treasury-or-venue-reading-stale');
+      !fresh(timestamps.account, now, freshnessMs) ||
+      !fresh(timestamps.receiptObservation, now, freshnessMs) ||
+      !fresh(timestamps.mandateObserved, now, freshnessMs))
+    return block('freshness', 'payment-treasury-mandate-or-venue-reading-stale');
   let validUntil;
   try { validUntil = parseTime(authorization.validUntil, 'mandate-expiry'); }
   catch { return block('mandate', 'authorization-expiry-invalid'); }
