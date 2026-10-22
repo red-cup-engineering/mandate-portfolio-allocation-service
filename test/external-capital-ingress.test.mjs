@@ -11,7 +11,7 @@ const fixture = () => ({
   receipt: { id: 'provider:receipt-1', principal: '561-group',
     evidenceRef: 'provider:balance-transaction-1', state: 'settled',
     payerRelation: 'independent-external', payer: 'external-customer',
-    currency: 'USD', netCents: 12000, settledAt: t(1) },
+    currency: 'USD', netCents: 12000, settledAt: t(1), observedAt: t(15) },
   posting: { id: 'group:ledger-post-1', principal: '561-group',
     evidenceRef: 'group:eavt-post-1', state: 'posted',
     receiptId: 'provider:receipt-1', classification: 'earned-revenue',
@@ -23,7 +23,8 @@ const fixture = () => ({
   authorization: { id: 'group:finance-grant-1', principal: '561-group',
     state: 'approved', approvedBy: 'group:competent-authority',
     authorityEvidenceRef: 'group:mandate-1', destinationVenue: 'alpaca',
-    maxCents: 8000, validUntil: '2026-10-23T00:00:00Z' },
+    maxCents: 8000, revoked: false, approvedAt: t(10), observedAt: t(15),
+    validUntil: '2026-10-23T00:00:00Z' },
   transfer: { id: 'bank:transfer-1', principal: '561-group',
     evidenceRef: 'bank:transfer-proof-1', state: 'settled',
     authorizationId: 'group:finance-grant-1', receiptId: 'provider:receipt-1',
@@ -94,7 +95,7 @@ test('conservation, reserves and destination evidence are required', () => {
 });
 
 test('duplicate source allocations cannot be admitted a second time', () => {
-  for (const id of ['provider:receipt-1', 'bank:transfer-1']) {
+  for (const id of ['provider:receipt-1', 'group:ledger-post-1', 'bank:credit-1', 'bank:transfer-1', 'alpaca:deposit-1']) {
     const x = fixture(); x.priorAllocationIds = [id]; deny(x, 'deduplication');
   }
   const x = fixture(); delete x.priorAllocationIds;
@@ -106,6 +107,8 @@ test('authorization must be approved, current, and name the destination', () => 
   const y = fixture(); y.authorization.validUntil = t(30); deny(y, 'mandate');
   const z = fixture(); z.authorization.destinationVenue = 'kalshi'; deny(z, 'account');
   const w = fixture(); w.transfer.authorizationId = 'unrelated'; deny(w, 'transfer');
+  const r = fixture(); r.authorization.revoked = true; deny(r, 'mandate');
+  const q = fixture(); q.account.reservedCents = 7000; deny(q, 'account');
 });
 
 test('clock order, freshness, chain and currency qualification are enforced', () => {
@@ -121,6 +124,22 @@ test('unsafe cents and empty account balance cannot produce spend authority', ()
   const y = fixture(); y.account.freeCashCents = NaN; deny(y, 'account');
   const z = fixture(); z.account.freeCashCents = -1; deny(z, 'account');
   const w = fixture(); w.account.freeCashCents = 0; deny(w, 'budget');
+});
+
+
+test('authorization must precede funding and be recently verified as active', () => {
+  const x = fixture(); x.authorization.approvedAt = t(12); deny(x, 'clock');
+  const y = fixture(); y.authorization.observedAt = t(8); deny(y, 'clock');
+  const z = fixture(); z.asOf = t(30); z.freshnessMs = 21 * 60_000;
+  z.authorization.approvedAt = t(7); z.authorization.observedAt = t(8);
+  deny(z, 'freshness');
+  const w = fixture(); delete w.authorization.approvedAt; deny(w, 'clock');
+});
+test('stale provider settlement snapshots cannot silently survive later reversals', () => {
+  const x = fixture(); x.asOf = t(15); x.freshnessMs = 6 * 60_000;
+  x.receipt.observedAt = t(8); deny(x, 'freshness');
+  const y = fixture(); y.receipt.observedAt = t(31); deny(y, 'clock');
+  const z = fixture(); delete z.receipt.observedAt; deny(z, 'clock');
 });
 
 test('the tightest real cash, mandate, and venue ceiling wins', () => {
