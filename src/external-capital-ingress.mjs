@@ -79,7 +79,7 @@ export function assayExternalCapitalIngress(input) {
       !cents(treasury.protectedReserveCents))
     return block('treasury', 'cleared-attributable-reserve-adjusted-cash-missing');
 
-  if (authorization.state !== 'approved' || authorization.revoked === true ||
+  if (authorization.state !== 'approved' || authorization.revoked !== false ||
       !named(authorization.id) || !named(authorization.approvedBy) ||
       authorization.principal !== principal ||
       !named(authorization.destinationVenue) || !cents(authorization.maxCents) ||
