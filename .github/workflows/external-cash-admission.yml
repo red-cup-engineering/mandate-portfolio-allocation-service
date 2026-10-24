@@ -1,0 +1,28 @@
+name: External cash admission checks
+on:
+  pull_request:
+    paths:
+      - 'src/external-capital-ingress.mjs'
+      - 'test/external-capital-ingress.test.mjs'
+      - 'package.json'
+      - '.github/workflows/external-cash-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pure-cash-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout proposed source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact source syntax
+        run: node --check src/external-capital-ingress.mjs
+      - name: Run offline, dependency-free money safety regression
+        run: node --test test/external-capital-ingress.test.mjs

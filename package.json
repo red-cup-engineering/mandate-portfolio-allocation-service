@@ -8,6 +8,7 @@
     "url": "git+https://github.com/red-cup-engineering/mandate-portfolio-allocation-service.git"
   },
   "exports": {
+    "./external-capital-ingress": "./src/external-capital-ingress.mjs",
     ".": "./src/allocate.mjs",
     "./allocate-opportunities": "./src/allocate-opportunities.mjs",
     "./market-game": "./src/market-game.mjs",
