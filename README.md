@@ -62,7 +62,7 @@ EVM/GMX observations, capital snapshots, quotes, strategies, shared forecast,
 conditional decisions and contrary economic outcome evidence directly as
 native **SignCells** identified by **SCA** and presented as typed **SEN**
 values in **SEAVT** rows. It imports the owning
-`@red-cup-engineering/semiotic-eavt-engineering-services-section` provider.
+`@red-cup-engineering/semiotic-eavt-services-section` provider.
 The market-game executable exposes this **read-only** view:
 
 ```sh
