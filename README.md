@@ -47,7 +47,7 @@ node apps/market-game.mjs plan --record play.jsonl --policy policy.json --at 202
 ```
 
 `news --feeds feeds.json [--cursor cursor.json] --record play.jsonl` reuses the
-house communicating faculty's RSS/Atom reader. Feed entries are `{id,url,kind}`;
+Group communicating faculty's RSS/Atom reader. Feed entries are `{id,url,kind}`;
 pass a cursor path to create or update its deduplication state. Existing
 Kalshi source CloudEvents can be ingested with `--format newswire`. Alpaca news
 retains publisher, URL, update time and symbols. EVM logs retain chain, block,
@@ -342,7 +342,7 @@ merge does not establish installed host receiving.
 ## Native SignCraft/SignGraph receipt composition
 
 The `./scenario-sign-history` export is an executable, pure bridge from a
-received categorical source signal to the house's **actual** SignStuff
+received categorical source signal to the Group's **actual** SignStuff
 capabilities. Its `composeConditionalScenarioHistory` takes a checked
 `projectObservedScenarioConditioningSign` and three original-byte
 `sourceReceipts` (prior forecast, frozen emission model, actual observation).
